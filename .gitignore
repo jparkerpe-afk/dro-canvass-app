@@ -7,3 +7,6 @@
 .DS_Store
 Thumbs.db
 *.swp
+
+# Local tool config
+.claude/
