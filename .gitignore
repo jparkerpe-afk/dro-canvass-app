@@ -1,0 +1,9 @@
+# Voter data — NEVER commit. See SPEC.md section 2.
+*.csv
+/data/
+/exports/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
