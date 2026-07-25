@@ -1,4 +1,6 @@
 import { importCsvFile, ImportError, getWalkerName, setWalkerName } from './import.js';
+import { openDB, getAll } from './db.js';
+import { initMap, addHouseholdLayers, loadHouseholdFeatures } from './map.js';
 
 const swStatusEl = document.getElementById('sw-status');
 
@@ -15,12 +17,59 @@ if ('serviceWorker' in navigator) {
   swStatusEl.textContent = 'Service worker: not supported in this browser';
 }
 
+// ---- View toggle (setup screen vs. map screen) ----
+
+const setupView = document.getElementById('setup-view');
+const mapView = document.getElementById('map-view');
+const navMapBtn = document.getElementById('nav-map');
+const navSetupBtn = document.getElementById('nav-setup');
+
+let map = null;
+
+function showSetup() {
+  setupView.style.display = 'block';
+  mapView.style.display = 'none';
+}
+
+function showMap() {
+  setupView.style.display = 'none';
+  mapView.style.display = 'flex';
+  if (!map) {
+    map = initMap('map-container');
+    map.on('load', () => {
+      addHouseholdLayers(map);
+      refreshPins();
+    });
+  } else {
+    map.resize();
+    refreshPins();
+  }
+}
+
+navMapBtn.addEventListener('click', showMap);
+navSetupBtn.addEventListener('click', showSetup);
+
+async function refreshPins() {
+  if (!map || !map.getSource('households')) return;
+  const db = await openDB();
+  const data = await loadHouseholdFeatures(db);
+  map.getSource('households').setData(data);
+}
+
+openDB().then(async (db) => {
+  const households = await getAll(db, 'households');
+  if (households.length > 0) {
+    showMap();
+  } else {
+    showSetup();
+  }
+});
+
+// ---- CSV import ----
+
 const csvInput = document.getElementById('csv-input');
 const importStatus = document.getElementById('import-status');
 const importSummary = document.getElementById('import-summary');
-const walkerInput = document.getElementById('walker-name-input');
-const walkerSaveBtn = document.getElementById('walker-name-save');
-const walkerStatus = document.getElementById('walker-name-status');
 
 csvInput.addEventListener('change', async () => {
   const file = csvInput.files[0];
@@ -40,6 +89,7 @@ csvInput.addEventListener('change', async () => {
         <li>${stats.householdCount} household(s), ${stats.voterCount} voter(s) total in storage</li>
       </ul>
     `;
+    refreshPins();
   } catch (err) {
     if (err instanceof ImportError) {
       importStatus.textContent = err.message;
@@ -52,6 +102,12 @@ csvInput.addEventListener('change', async () => {
     csvInput.value = '';
   }
 });
+
+// ---- Walker name ----
+
+const walkerInput = document.getElementById('walker-name-input');
+const walkerSaveBtn = document.getElementById('walker-name-save');
+const walkerStatus = document.getElementById('walker-name-status');
 
 getWalkerName().then((name) => {
   if (name) {
