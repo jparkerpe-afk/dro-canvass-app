@@ -1,4 +1,4 @@
-const CACHE_NAME = 'dro-canvass-shell-v1';
+const CACHE_NAME = 'dro-canvass-shell-v2';
 
 const APP_SHELL = [
   './',
@@ -6,6 +6,10 @@ const APP_SHELL = [
   './manifest.json',
   './css/styles.css',
   './js/app.js',
+  './js/db.js',
+  './js/hash.js',
+  './js/import.js',
+  './js/vendor/papaparse.min.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-192-maskable.png',
