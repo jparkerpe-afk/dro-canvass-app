@@ -26,11 +26,17 @@ const APP_SHELL = [
   './js/sheet.js',
   './js/vendor/papaparse.min.js',
   './js/vendor/maplibre-gl.js',
+  './fonts/montserrat-var.woff2',
+  './fonts/open-sans-var.woff2',
+  './fonts/open-sans-italic-var.woff2',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-192-maskable.png',
   './icons/icon-512-maskable.png',
-  './icons/apple-touch-icon.png'
+  './icons/apple-touch-icon.png',
+  './icons/fav_header.png',
+  './icons/favicon-32.png',
+  './icons/favicon-180.png'
 ];
 
 self.addEventListener('install', (event) => {

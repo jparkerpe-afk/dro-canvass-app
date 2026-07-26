@@ -1,13 +1,13 @@
 {
-  "name": "DRO Canvass",
+  "name": "Cheryl Parker Canvass — Del Rey Oaks",
   "short_name": "DRO Canvass",
-  "description": "Door-to-door canvassing tool for Del Rey Oaks. All data stays on this device.",
+  "description": "Door-to-door canvassing tool for the Cheryl Parker for Del Rey Oaks City Council campaign. All voter data stays on this device.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#1b5e20",
-  "theme_color": "#1b5e20",
+  "background_color": "#F7ECE8",
+  "theme_color": "#203864",
   "icons": [
     {
       "src": "icons/icon-192.png",

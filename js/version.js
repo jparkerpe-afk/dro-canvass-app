@@ -10,4 +10,4 @@
 // Plain script, not a module: the service worker loads it with
 // importScripts() and the page loads it with a <script> tag, and `self` is
 // the global in both contexts.
-self.APP_VERSION = '2026.07.25-01';
+self.APP_VERSION = '2026.07.25-02';

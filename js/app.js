@@ -136,15 +136,22 @@ const navSetupBtn = document.getElementById('nav-setup');
 
 let map = null;
 
+function setActiveNav(button) {
+  navMapBtn.classList.toggle('active', button === navMapBtn);
+  navSetupBtn.classList.toggle('active', button === navSetupBtn);
+}
+
 function showSetup() {
   setupView.style.display = 'block';
   mapView.style.display = 'none';
+  setActiveNav(navSetupBtn);
   stopGps();
 }
 
 function showMap() {
   setupView.style.display = 'none';
   mapView.style.display = 'flex';
+  setActiveNav(navMapBtn);
   if (!map) {
     map = initMap('map-container');
     map.on('load', () => {
