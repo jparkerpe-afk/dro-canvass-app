@@ -24,6 +24,7 @@ const APP_SHELL = [
   './js/map.js',
   './js/geo.js',
   './js/sheet.js',
+  './js/annotations.js',
   './js/vendor/papaparse.min.js',
   './js/vendor/maplibre-gl.js',
   './fonts/montserrat-var.woff2',

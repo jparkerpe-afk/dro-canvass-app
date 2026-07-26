@@ -1,8 +1,38 @@
 import { getAll } from './db.js';
 
-// Del Rey Oaks, CA city hall — reasonable default center for a ~0.5 sq mi city.
-export const MAP_CENTER = [-121.8107, 36.5968];
-export const DEFAULT_ZOOM = 15.5;
+// Fallback only, used when there is no data to fit to yet. The real opening
+// view comes from fitToHouseholds() — a hardcoded centre silently strands the
+// walker on an empty map if it drifts from where the roll actually is.
+export const MAP_CENTER = [-121.8385, 36.5938];
+export const DEFAULT_ZOOM = 15;
+
+// Frames the whole roll on first load. Called once so it does not fight the
+// walker's own panning and zooming afterwards.
+export function fitToHouseholds(map, featureCollection) {
+  const feats = (featureCollection.features || []).filter(
+    (f) => f.geometry && Array.isArray(f.geometry.coordinates)
+  );
+  if (feats.length === 0) return false;
+
+  let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+  for (const f of feats) {
+    const [lon, lat] = f.geometry.coordinates;
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    if (lon < minLon) minLon = lon;
+    if (lon > maxLon) maxLon = lon;
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+  }
+  if (!Number.isFinite(minLon)) return false;
+
+  if (minLon === maxLon && minLat === maxLat) {
+    map.jumpTo({ center: [minLon, minLat], zoom: 17 });
+    return true;
+  }
+
+  map.fitBounds([[minLon, minLat], [maxLon, maxLat]], { padding: 28, animate: false });
+  return true;
+}
 
 const STATUS_COLORS = {
   not_visited: '#9e9e9e',

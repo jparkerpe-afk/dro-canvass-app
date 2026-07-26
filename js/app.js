@@ -3,11 +3,12 @@ import { openDB, getAll } from './db.js';
 import {
   initMap, addHouseholdLayers, loadHouseholdFeatures,
   addWalkerLayer, updateWalkerPosition,
-  addHighlightLayer, setHighlightedHousehold,
+  addHighlightLayer, setHighlightedHousehold, fitToHouseholds,
 } from './map.js';
 import { startWatching, stopWatching, findNearestHousehold, describeGeoError } from './geo.js';
 import { openSheet } from './sheet.js';
 import { exportGeoJSON, exportCSV, exportBackup, exportSummary } from './export.js';
+import { applyAnnotationFile, AnnotationError } from './annotations.js';
 
 const swStatusEl = document.getElementById('sw-status');
 const appVersionEl = document.getElementById('app-version');
@@ -173,6 +174,8 @@ navSetupBtn.addEventListener('click', showSetup);
 
 let cachedHouseholds = [];
 
+let hasFramedData = false;
+
 async function refreshPins() {
   if (!map || !map.getSource('households')) return;
   const db = await openDB();
@@ -186,6 +189,8 @@ async function refreshPins() {
     lat: f.geometry.coordinates[1],
   }));
   map.getSource('households').setData(data);
+
+  if (!hasFramedData && fitToHouseholds(map, data)) hasFramedData = true;
 }
 
 // ---- GPS + proximity highlight ----
@@ -324,6 +329,49 @@ walkerSaveBtn.addEventListener('click', async () => {
   }
   await setWalkerName(name);
   walkerStatus.textContent = `Saved: ${name}`;
+});
+
+// ---- Apply annotations ----
+
+const annotationsInput = document.getElementById('annotations-input');
+const annotationsStatus = document.getElementById('annotations-status');
+const annotationsSummary = document.getElementById('annotations-summary');
+
+annotationsInput.addEventListener('change', async () => {
+  const file = annotationsInput.files[0];
+  if (!file) return;
+
+  annotationsStatus.textContent = `Applying ${file.name}…`;
+  annotationsSummary.textContent = '';
+
+  try {
+    const s = await applyAnnotationFile(file);
+    annotationsStatus.textContent = `Applied to ${s.householdsTouched} household(s).`;
+    const rows = [
+      `${s.votersTagged} voter(s) tagged`,
+      `${s.votersAdded} resident(s) added in the field`,
+      `${s.notesAdded} note(s) appended`,
+      `${s.pinsCorrected} map pin(s) corrected`,
+    ];
+    if (s.unmatchedAddresses.length) {
+      rows.push(`<strong>${s.unmatchedAddresses.length} address(es) not found:</strong> ${s.unmatchedAddresses.join('; ')}`);
+    }
+    if (s.unmatchedVoters.length) {
+      rows.push(`<strong>${s.unmatchedVoters.length} name(s) not found:</strong> ${s.unmatchedVoters.join('; ')}`);
+    }
+    annotationsSummary.innerHTML = `<ul>${rows.map((r) => `<li>${r}</li>`).join('')}</ul>`;
+    refreshPins();
+  } catch (err) {
+    if (err instanceof AnnotationError) {
+      annotationsStatus.textContent = err.message;
+    } else {
+      annotationsStatus.textContent = 'Applying annotations failed. See console for details.';
+      console.error('Annotation apply failed', err);
+    }
+    annotationsSummary.textContent = '';
+  } finally {
+    annotationsInput.value = '';
+  }
 });
 
 // ---- Export ----

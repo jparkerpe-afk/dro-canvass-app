@@ -500,6 +500,37 @@ section h2 {
   letter-spacing: 0.01em;
 }
 
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.35rem 0;
+}
+
+.tag-badge {
+  font-family: var(--head);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.5rem;
+  border-radius: 3px;
+  background: var(--navy);
+  color: var(--white);
+  white-space: nowrap;
+}
+
+.tag-badge.endorser {
+  background: var(--rust);
+}
+
+.tag-badge.muted,
+.tag-badge.field-added,
+.tag-badge[class~="moved-away"] {
+  background: var(--cream);
+  color: var(--rust);
+}
+
 .stale-badge {
   font-family: var(--body);
   font-size: 0.72rem;

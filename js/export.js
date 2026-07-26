@@ -73,6 +73,8 @@ export async function exportGeoJSON() {
           sign_request: !!h.sign_request,
           volunteer_interest: !!h.volunteer_interest,
           notes: h.notes || '',
+          household_tags: (h.tags || []).join('; '),
+          accuracy_type: h.accuracy_type || (members[0] && members[0].accuracy_type) || '',
           voter_count: members.filter((v) => !v.stale).length,
           // Flattened alongside the nested array so the attribute survives a
           // shapefile round-trip, which cannot hold nested structures.
@@ -88,6 +90,8 @@ export async function exportGeoJSON() {
             support_level: v.support_level || 'unknown',
             accuracy_type: v.accuracy_type || '',
             stale: !!v.stale,
+            source: v.source || 'county',
+            tags: (v.tags || []).join('; '),
           })),
         },
       };
@@ -103,9 +107,9 @@ export async function exportGeoJSON() {
 const CSV_COLUMNS = [
   'household_id', 'address', 'latitude', 'longitude',
   'contact_status', 'contacted_at', 'contacted_by',
-  'sign_request', 'volunteer_interest', 'notes',
+  'sign_request', 'volunteer_interest', 'notes', 'household_tags',
   'voter_name', 'party', 'age', 'activity_level', 'support_level',
-  'accuracy_type', 'stale',
+  'accuracy_type', 'stale', 'source', 'voter_tags',
 ];
 
 function csvCell(value) {
@@ -130,13 +134,14 @@ export async function exportCSV() {
       h.sign_request ? 'true' : 'false',
       h.volunteer_interest ? 'true' : 'false',
       h.notes || '',
+      (h.tags || []).join('; '),
     ];
 
     const members = byHousehold.get(h.id) || [];
     if (members.length === 0) {
       // Keep the household in the file even with no voter rows, so the export
       // stays a complete picture rather than dropping addresses.
-      lines.push(csvRow([...householdCells, '', '', '', '', '', '', '']));
+      lines.push(csvRow([...householdCells, '', '', '', '', '', '', '', '', '']));
       rowCount++;
       continue;
     }
@@ -146,6 +151,7 @@ export async function exportCSV() {
         ...householdCells,
         v.name, v.party || '', v.age || '', v.activity_level || '',
         v.support_level || 'unknown', v.accuracy_type || '', v.stale ? 'true' : 'false',
+        v.source || 'county', (v.tags || []).join('; '),
       ]));
       rowCount++;
     }

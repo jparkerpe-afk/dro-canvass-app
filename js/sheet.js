@@ -1,4 +1,5 @@
 import { openDB, get, getByIndex, update, getMeta } from './db.js';
+import { tagLabel } from './annotations.js';
 
 export const CONTACT_STATUSES = [
   { value: 'talked', label: 'Talked' },
@@ -20,16 +21,28 @@ export const SUPPORT_LEVELS = [
 
 // Geocodio types we treat as rooftop-quality. Anything else gets a warning
 // badge so the walker knows the pin may not be the house in front of them.
-const HIGH_CONFIDENCE_ACCURACY = new Set(['rooftop', 'point', 'nearest_rooftop_match']);
-
+// The QGIS workflow emits its own descriptive labels rather than raw Geocodio
+// codes — "Verified (rooftop)", "Approximate -- verify in person",
+// "Verified (county address point)", "Verified (OSM building match)",
+// "Verified (canvasser confirmed)". Matching against raw codes flagged every
+// household as low confidence, which trains the walker to ignore the one
+// warning that matters. Treat anything explicitly approximate or estimated as
+// low confidence, and anything verified as good.
 export function isLowConfidenceGeocode(accuracyType) {
-  if (!accuracyType) return false;
-  return !HIGH_CONFIDENCE_ACCURACY.has(accuracyType.trim().toLowerCase());
+  if (!accuracyType) return true; // no information is not confidence
+  const a = accuracyType.trim().toLowerCase();
+  if (/\b(approximate|estimated|interpolat|centroid|street[ _-]?center|place|city|state|county name|zip)\b/.test(a)) {
+    return true;
+  }
+  if (/\bverified\b/.test(a)) return false;
+  // Raw Geocodio codes, in case a future export uses them directly.
+  return !['rooftop', 'point', 'nearest_rooftop_match', 'range_interpolation'].includes(a);
 }
 
 const sheetEl = document.getElementById('household-sheet');
 const addressEl = document.getElementById('sheet-address');
 const geoWarningEl = document.getElementById('sheet-geo-warning');
+const householdTagsEl = document.getElementById('sheet-household-tags');
 const statusButtonsEl = document.getElementById('status-buttons');
 const voterListEl = document.getElementById('voter-list');
 const signRequestEl = document.getElementById('sign-request');
@@ -113,14 +126,21 @@ function renderVoters(voters) {
 
   for (const voter of voters) {
     const row = document.createElement('div');
-    row.className = 'voter-row' + (voter.stale ? ' stale' : '');
+    const inactive = voter.stale || (voter.tags || []).includes('moved-away');
+    row.className = 'voter-row' + (inactive ? ' stale' : '');
 
     const details = [voter.party, voter.age ? `age ${voter.age}` : null,
       voter.activity_level ? `activity ${voter.activity_level}` : null]
       .filter(Boolean).join(' · ');
 
+    const badges = [
+      voter.stale ? '<span class="tag-badge muted">not in latest list</span>' : '',
+      ...(voter.tags || []).map((t) => `<span class="tag-badge ${escapeHtml(t)}">${escapeHtml(tagLabel(t))}</span>`),
+    ].join(' ');
+
     row.innerHTML = `
-      <div class="voter-name">${escapeHtml(voter.name)}${voter.stale ? ' <span class="stale-badge">not in latest list</span>' : ''}</div>
+      <div class="voter-name">${escapeHtml(voter.name)}</div>
+      ${badges.trim() ? `<div class="tag-row">${badges}</div>` : ''}
       <div class="voter-meta hint">${escapeHtml(details)}</div>
     `;
 
@@ -156,8 +176,16 @@ export async function openSheet(householdId, onChange) {
 
   addressEl.textContent = household.address;
 
-  const lowConfidence = voters.some((v) => isLowConfidenceGeocode(v.accuracy_type));
+  const lowConfidence = isLowConfidenceGeocode(
+    household.accuracy_type || (voters[0] && voters[0].accuracy_type)
+  );
   geoWarningEl.classList.toggle('hidden', !lowConfidence);
+
+  const hTags = household.tags || [];
+  householdTagsEl.innerHTML = hTags
+    .map((t) => `<span class="tag-badge ${escapeHtml(t)}">${escapeHtml(tagLabel(t))}</span>`)
+    .join(' ');
+  householdTagsEl.classList.toggle('hidden', hTags.length === 0);
 
   renderStatusButtons(household.contact_status);
   renderVoters(voters);
