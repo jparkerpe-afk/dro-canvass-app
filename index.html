@@ -65,6 +65,49 @@
   </main>
 </div>
 
+<div id="household-sheet" class="hidden" role="dialog" aria-modal="true" aria-labelledby="sheet-address">
+  <div id="sheet-panel">
+    <header id="sheet-header">
+      <div class="sheet-title">
+        <h2 id="sheet-address"></h2>
+        <p id="sheet-geo-warning" class="geo-warning hidden">Approximate location — the pin may be off</p>
+      </div>
+      <button id="sheet-close" type="button" aria-label="Close">&#10005;</button>
+    </header>
+
+    <div id="sheet-body">
+      <section class="sheet-section">
+        <h3>Outcome</h3>
+        <div id="status-buttons" class="status-grid"></div>
+      </section>
+
+      <section class="sheet-section">
+        <h3>People at this address</h3>
+        <div id="voter-list"></div>
+      </section>
+
+      <section class="sheet-section">
+        <h3>Household</h3>
+        <label class="toggle-row">
+          <input type="checkbox" id="sign-request">
+          <span>Sign request</span>
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="volunteer-interest">
+          <span>Volunteer interest</span>
+        </label>
+      </section>
+
+      <section class="sheet-section">
+        <h3>Notes</h3>
+        <textarea id="household-notes" rows="4" placeholder="Anything worth remembering…"></textarea>
+      </section>
+    </div>
+
+    <p id="sheet-saved" class="saved-indicator">Saved</p>
+  </div>
+</div>
+
 <script src="js/vendor/papaparse.min.js"></script>
 <script src="js/vendor/maplibre-gl.js"></script>
 <script type="module" src="js/app.js"></script>

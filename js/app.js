@@ -4,9 +4,9 @@ import {
   initMap, addHouseholdLayers, loadHouseholdFeatures,
   addWalkerLayer, updateWalkerPosition,
   addHighlightLayer, setHighlightedHousehold,
-  showHouseholdPopup,
 } from './map.js';
 import { startWatching, stopWatching, findNearestHousehold, describeGeoError } from './geo.js';
+import { openSheet } from './sheet.js';
 
 const swStatusEl = document.getElementById('sw-status');
 
@@ -44,7 +44,7 @@ function showMap() {
   if (!map) {
     map = initMap('map-container');
     map.on('load', () => {
-      addHouseholdLayers(map);
+      addHouseholdLayers(map, openHouseholdSheet);
       addHighlightLayer(map);
       addWalkerLayer(map);
       refreshPins();
@@ -135,10 +135,15 @@ function hideProximityBar() {
 }
 
 proximityOpenBtn.addEventListener('click', () => {
-  if (!nearestHousehold || !map) return;
-  map.flyTo({ center: [nearestHousehold.lon, nearestHousehold.lat], zoom: Math.max(map.getZoom(), 18) });
-  showHouseholdPopup(map, nearestHousehold);
+  if (!nearestHousehold) return;
+  openHouseholdSheet(nearestHousehold.id);
 });
+
+// Pin colors and the proximity bar's voter count both derive from stored
+// records, so re-read after any edit rather than patching the map in place.
+function openHouseholdSheet(householdId) {
+  openSheet(householdId, refreshPins);
+}
 
 openDB().then(async (db) => {
   const households = await getAll(db, 'households');

@@ -189,3 +189,192 @@ section h2 {
   margin: 0.5rem 0 0;
   padding-left: 1.2rem;
 }
+
+/* ---- Household sheet ---- */
+
+#household-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: flex-end;
+}
+
+#sheet-panel {
+  position: relative;
+  width: 100%;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+  border-top: 2px solid var(--color-border);
+  border-radius: 14px 14px 0 0;
+}
+
+#sheet-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.sheet-title {
+  min-width: 0;
+}
+
+#sheet-address {
+  margin: 0;
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+.geo-warning {
+  margin: 0.4rem 0 0;
+  font-size: 0.9rem;
+  color: #ffcc80;
+}
+
+#sheet-close {
+  flex-shrink: 0;
+  font-size: 1.3rem;
+  padding: 0.5rem 0.85rem;
+  line-height: 1;
+}
+
+#sheet-body {
+  overflow-y: auto;
+  padding: 0 1rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sheet-section {
+  background: none;
+  border: none;
+  border-radius: 0;
+  padding: 1rem 0;
+  margin: 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.sheet-section:last-child {
+  border-bottom: none;
+  padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+}
+
+.sheet-section h3 {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.75;
+}
+
+/* Most-used control in the app — big enough to hit on a doorstep. */
+.status-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+
+.status-btn {
+  padding: 1.1rem 0.5rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  border-width: 2px;
+}
+
+.status-btn.active {
+  background: var(--color-accent);
+  border-color: #66bb6a;
+  color: #ffffff;
+}
+
+.voter-row {
+  padding: 0.85rem 0;
+  border-bottom: 1px solid #262626;
+}
+
+.voter-row:last-child {
+  border-bottom: none;
+}
+
+.voter-row.stale {
+  opacity: 0.6;
+}
+
+.voter-name {
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.stale-badge {
+  font-size: 0.75rem;
+  font-weight: 400;
+  background: #4e342e;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.voter-meta {
+  margin-bottom: 0.5rem;
+}
+
+.support-select {
+  width: 100%;
+  font-size: 1.05rem;
+  padding: 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.7rem 0;
+  font-size: 1.1rem;
+}
+
+.toggle-row input[type="checkbox"] {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  accent-color: #66bb6a;
+}
+
+#household-notes {
+  width: 100%;
+  font-size: 1.05rem;
+  font-family: inherit;
+  padding: 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  resize: vertical;
+}
+
+.saved-indicator {
+  position: absolute;
+  top: -2.6rem;
+  right: 1rem;
+  margin: 0;
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: #ffffff;
+  font-size: 0.9rem;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+
+.saved-indicator.visible {
+  opacity: 1;
+}

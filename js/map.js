@@ -35,7 +35,37 @@ export function initMap(containerId) {
   return map;
 }
 
-export function addHouseholdLayers(map) {
+// Counts at or above this collapse to "N+". Real households top out well
+// below this; the cap just bounds how many icons we pre-render.
+const MAX_BADGE_COUNT = 9;
+
+// The pin count badge is drawn to a canvas and registered as a map image
+// rather than using a `text-field` symbol layer: text requires the style to
+// declare a `glyphs` font endpoint, which would mean an external request on
+// every map load and no badges at all when offline.
+function makeCountIcon(label) {
+  const size = 20;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.font = 'bold 13px -apple-system, Roboto, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, size / 2, size / 2);
+  return ctx.getImageData(0, 0, size, size);
+}
+
+function registerCountBadgeIcons(map) {
+  for (let n = 2; n < MAX_BADGE_COUNT; n++) {
+    if (!map.hasImage(`count-${n}`)) map.addImage(`count-${n}`, makeCountIcon(String(n)));
+  }
+  const plusId = `count-${MAX_BADGE_COUNT}plus`;
+  if (!map.hasImage(plusId)) map.addImage(plusId, makeCountIcon(`${MAX_BADGE_COUNT}+`));
+}
+
+export function addHouseholdLayers(map, onHouseholdClick) {
   map.addSource('households', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
@@ -61,20 +91,22 @@ export function addHouseholdLayers(map) {
     },
   });
 
+  registerCountBadgeIcons(map);
+
   map.addLayer({
     id: 'household-badge',
     type: 'symbol',
     source: 'households',
     filter: ['>', ['get', 'voterCount'], 1],
     layout: {
-      'text-field': ['to-string', ['get', 'voterCount']],
-      'text-size': 11,
-      'text-allow-overlap': true,
-      'text-ignore-placement': true,
-    },
-    paint: {
-      'text-color': '#ffffff',
-      'text-halo-width': 0,
+      'icon-image': [
+        'case',
+        ['>=', ['get', 'voterCount'], MAX_BADGE_COUNT],
+        `count-${MAX_BADGE_COUNT}plus`,
+        ['concat', 'count-', ['to-string', ['get', 'voterCount']]],
+      ],
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
     },
   });
 
@@ -87,26 +119,8 @@ export function addHouseholdLayers(map) {
 
   map.on('click', 'household-pins', (e) => {
     const props = e.features[0].properties;
-    showHouseholdPopup(map, props, e.lngLat);
+    if (onHouseholdClick) onHouseholdClick(props.id);
   });
-}
-
-function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
-
-export function showHouseholdPopup(map, household, lngLat) {
-  const at = lngLat || [household.lon, household.lat];
-  new maplibregl.Popup({ closeButton: true })
-    .setLngLat(at)
-    .setHTML(
-      `<strong>${escapeHtml(household.address)}</strong><br>` +
-      `Status: ${escapeHtml(household.contact_status)}<br>` +
-      `Voters: ${household.voterCount}`
-    )
-    .addTo(map);
 }
 
 // ---- Walker's own GPS position ----
