@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'dro-canvass-shell-v4';
+const SHELL_CACHE_NAME = 'dro-canvass-shell-v5';
 const TILE_CACHE_NAME = 'dro-canvass-tiles-v1';
 const TILE_HOST = 'tile.openstreetmap.org';
 
