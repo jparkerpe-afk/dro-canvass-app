@@ -190,6 +190,29 @@ section h2 {
   padding-left: 1.2rem;
 }
 
+.export-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+
+button.primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.version-line {
+  margin: 0 0 0.3rem;
+}
+
+#app-version {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.05rem;
+}
+
 /* ---- Household sheet ---- */
 
 #household-sheet {

@@ -7,21 +7,125 @@ import {
 } from './map.js';
 import { startWatching, stopWatching, findNearestHousehold, describeGeoError } from './geo.js';
 import { openSheet } from './sheet.js';
+import { exportGeoJSON, exportCSV, exportBackup, exportSummary } from './export.js';
 
 const swStatusEl = document.getElementById('sw-status');
+const appVersionEl = document.getElementById('app-version');
+const updateStatusEl = document.getElementById('update-status');
+const checkUpdateBtn = document.getElementById('check-update');
+const applyUpdateBtn = document.getElementById('apply-update');
+
+const APP_VERSION = window.APP_VERSION || 'unknown';
+appVersionEl.textContent = APP_VERSION;
+
+let swRegistration = null;
+let reloadingForUpdate = false;
+
+function showUpdateReady() {
+  updateStatusEl.textContent = 'A new version is ready to install.';
+  applyUpdateBtn.classList.remove('hidden');
+}
+
+function watchInstalling(worker) {
+  if (!worker) return;
+  worker.addEventListener('statechange', () => {
+    // A worker reaching "installed" while one already controls the page means
+    // this is an update rather than a first install.
+    if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+      showUpdateReady();
+    }
+  });
+}
+
+// register() can resolve either before or after the new worker finishes
+// installing, so neither reg.installing nor reg.waiting is reliably populated
+// at any single moment. Poll briefly rather than miss the transition and leave
+// a downloaded update with no way to apply it.
+function awaitWaitingWorker(reg, attemptsLeft = 60) {
+  if (reg.waiting) {
+    showUpdateReady();
+    return;
+  }
+  if (attemptsLeft <= 0) {
+    updateStatusEl.textContent = 'Update downloaded but did not finish installing. Reload the page.';
+    return;
+  }
+  setTimeout(() => awaitWaitingWorker(reg, attemptsLeft - 1), 250);
+}
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./service-worker.js')
-    .then(() => {
-      swStatusEl.textContent = 'Service worker: registered';
+  navigator.serviceWorker.register(`./service-worker.js?v=${encodeURIComponent(APP_VERSION)}`)
+    .then((reg) => {
+      swRegistration = reg;
+      swStatusEl.textContent = 'Offline ready';
+
+      if (reg.waiting && navigator.serviceWorker.controller) showUpdateReady();
+      else updateStatusEl.textContent = 'Up to date.';
+
+      watchInstalling(reg.installing);
+      reg.addEventListener('updatefound', () => watchInstalling(reg.installing));
     })
     .catch((err) => {
-      swStatusEl.textContent = 'Service worker: failed to register';
+      swStatusEl.textContent = 'Offline caching unavailable';
+      updateStatusEl.textContent = 'Could not check for updates.';
       console.error('Service worker registration failed', err);
     });
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloadingForUpdate) return;
+    reloadingForUpdate = true;
+    window.location.reload();
+  });
 } else {
   swStatusEl.textContent = 'Service worker: not supported in this browser';
+  updateStatusEl.textContent = 'Updates cannot be checked in this browser.';
 }
+
+// Reads the deployed version straight off the network. Asking the existing
+// registration to update() is not enough: this page's worker URL was built
+// from its own possibly-stale APP_VERSION, so a stale build would keep
+// checking a stale URL and be told it is current forever.
+async function fetchDeployedVersion() {
+  const res = await fetch(`./js/version.js?freshcheck=${Date.now()}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`version fetch failed: ${res.status}`);
+  const match = (await res.text()).match(/APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
+  if (!match) throw new Error('could not parse deployed version');
+  return match[1];
+}
+
+checkUpdateBtn.addEventListener('click', async () => {
+  updateStatusEl.textContent = 'Checking…';
+  try {
+    const deployed = await fetchDeployedVersion();
+    if (deployed === APP_VERSION) {
+      updateStatusEl.textContent = `Up to date — running ${APP_VERSION} (checked ${new Date().toLocaleTimeString()}).`;
+      return;
+    }
+    updateStatusEl.textContent = `Version ${deployed} is available. Downloading…`;
+    // Registering the deployed version's worker URL is what pulls the new
+    // build down; it installs alongside and waits for the Update tap.
+    const reg = await navigator.serviceWorker.register(
+      `./service-worker.js?v=${encodeURIComponent(deployed)}`
+    );
+    swRegistration = reg;
+    watchInstalling(reg.installing);
+    reg.addEventListener('updatefound', () => watchInstalling(reg.installing));
+    awaitWaitingWorker(reg);
+  } catch (err) {
+    updateStatusEl.textContent = 'Check failed — are you online?';
+    console.error('Update check failed', err);
+  }
+});
+
+applyUpdateBtn.addEventListener('click', () => {
+  const waiting = swRegistration && swRegistration.waiting;
+  if (!waiting) {
+    window.location.reload();
+    return;
+  }
+  updateStatusEl.textContent = 'Installing…';
+  waiting.postMessage('SKIP_WAITING');
+});
 
 // ---- View toggle (setup screen vs. map screen) ----
 
@@ -214,3 +318,28 @@ walkerSaveBtn.addEventListener('click', async () => {
   await setWalkerName(name);
   walkerStatus.textContent = `Saved: ${name}`;
 });
+
+// ---- Export ----
+
+const exportStatus = document.getElementById('export-status');
+
+async function runExport(label, fn) {
+  exportStatus.textContent = `Preparing ${label}…`;
+  try {
+    await fn();
+    const s = await exportSummary();
+    const visited = s.households - (s.counts.not_visited || 0);
+    exportStatus.textContent =
+      `${label} downloaded — ${s.households} households (${visited} contacted), ${s.voters} voters. Check your Downloads folder.`;
+  } catch (err) {
+    exportStatus.textContent = `${label} failed. See console for details.`;
+    console.error(`${label} export failed`, err);
+  }
+}
+
+document.getElementById('export-backup')
+  .addEventListener('click', () => runExport('Backup', exportBackup));
+document.getElementById('export-geojson')
+  .addEventListener('click', () => runExport('GeoJSON', exportGeoJSON));
+document.getElementById('export-csv')
+  .addEventListener('click', () => runExport('CSV', exportCSV));

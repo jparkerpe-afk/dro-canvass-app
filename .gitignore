@@ -3,6 +3,16 @@
 /data/
 /exports/
 
+# Export output also contains the full voter roll — names, addresses, and
+# recorded support levels. Matched by extension AND by the export filename
+# pattern, so a file is still excluded if a browser drops it somewhere
+# unexpected instead of the intended folder.
+*.geojson
+/downloads/
+dro_canvass_*.json
+dro_canvass_*.csv
+dro_canvass_*.geojson
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db
