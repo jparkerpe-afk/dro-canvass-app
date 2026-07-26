@@ -1,4 +1,4 @@
-const SHELL_CACHE_NAME = 'dro-canvass-shell-v3';
+const SHELL_CACHE_NAME = 'dro-canvass-shell-v4';
 const TILE_CACHE_NAME = 'dro-canvass-tiles-v1';
 const TILE_HOST = 'tile.openstreetmap.org';
 
@@ -13,6 +13,7 @@ const APP_SHELL = [
   './js/hash.js',
   './js/import.js',
   './js/map.js',
+  './js/geo.js',
   './js/vendor/papaparse.min.js',
   './js/vendor/maplibre-gl.js',
   './icons/icon-192.png',

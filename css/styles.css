@@ -69,6 +69,7 @@ html, body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
 }
 
 #map-container {
@@ -76,6 +77,51 @@ html, body {
   min-height: 60vh;
   border-radius: 10px;
   overflow: hidden;
+}
+
+.hidden {
+  display: none !important;
+}
+
+#gps-status {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  right: 0.75rem;
+  z-index: 5;
+  background: rgba(0, 0, 0, 0.8);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  margin: 0;
+}
+
+#proximity-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  border-radius: 10px 10px 0 0;
+  padding: 1rem;
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+#proximity-address {
+  font-weight: 600;
+  font-size: 1.15rem;
+}
+
+#proximity-open {
+  flex-shrink: 0;
+  background: var(--color-accent);
+  color: white;
+  border-color: var(--color-accent);
 }
 
 button {

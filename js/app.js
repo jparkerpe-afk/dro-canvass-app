@@ -1,6 +1,12 @@
 import { importCsvFile, ImportError, getWalkerName, setWalkerName } from './import.js';
 import { openDB, getAll } from './db.js';
-import { initMap, addHouseholdLayers, loadHouseholdFeatures } from './map.js';
+import {
+  initMap, addHouseholdLayers, loadHouseholdFeatures,
+  addWalkerLayer, updateWalkerPosition,
+  addHighlightLayer, setHighlightedHousehold,
+  showHouseholdPopup,
+} from './map.js';
+import { startWatching, stopWatching, findNearestHousehold, describeGeoError } from './geo.js';
 
 const swStatusEl = document.getElementById('sw-status');
 
@@ -29,6 +35,7 @@ let map = null;
 function showSetup() {
   setupView.style.display = 'block';
   mapView.style.display = 'none';
+  stopGps();
 }
 
 function showMap() {
@@ -38,23 +45,100 @@ function showMap() {
     map = initMap('map-container');
     map.on('load', () => {
       addHouseholdLayers(map);
+      addHighlightLayer(map);
+      addWalkerLayer(map);
       refreshPins();
+      startGps();
     });
   } else {
     map.resize();
     refreshPins();
+    startGps();
   }
 }
 
 navMapBtn.addEventListener('click', showMap);
 navSetupBtn.addEventListener('click', showSetup);
 
+let cachedHouseholds = [];
+
 async function refreshPins() {
   if (!map || !map.getSource('households')) return;
   const db = await openDB();
   const data = await loadHouseholdFeatures(db);
+  cachedHouseholds = data.features.map((f) => ({
+    id: f.properties.id,
+    address: f.properties.address,
+    contact_status: f.properties.contact_status,
+    voterCount: f.properties.voterCount,
+    lon: f.geometry.coordinates[0],
+    lat: f.geometry.coordinates[1],
+  }));
   map.getSource('households').setData(data);
 }
+
+// ---- GPS + proximity highlight ----
+
+const gpsStatusEl = document.getElementById('gps-status');
+const proximityBar = document.getElementById('proximity-bar');
+const proximityAddress = document.getElementById('proximity-address');
+const proximityDistance = document.getElementById('proximity-distance');
+const proximityVoters = document.getElementById('proximity-voters');
+const proximityOpenBtn = document.getElementById('proximity-open');
+
+let watchId = null;
+let nearestHousehold = null;
+
+function startGps() {
+  if (watchId != null) return;
+  watchId = startWatching({ onFix: handleGpsFix, onError: handleGpsError });
+}
+
+function stopGps() {
+  if (watchId != null) {
+    stopWatching(watchId);
+    watchId = null;
+  }
+  hideProximityBar();
+}
+
+function handleGpsFix({ lat, lon }) {
+  gpsStatusEl.classList.add('hidden');
+  updateWalkerPosition(map, lat, lon);
+
+  const result = findNearestHousehold(lat, lon, cachedHouseholds);
+  if (!result) {
+    hideProximityBar();
+    setHighlightedHousehold(map, null);
+    return;
+  }
+  showProximityBar(result.household, result.distanceMeters);
+  setHighlightedHousehold(map, result.household);
+}
+
+function handleGpsError(err) {
+  gpsStatusEl.textContent = describeGeoError(err);
+  gpsStatusEl.classList.remove('hidden');
+}
+
+function showProximityBar(household, distanceMeters) {
+  nearestHousehold = household;
+  proximityAddress.textContent = household.address;
+  proximityDistance.textContent = `${Math.round(distanceMeters)} m`;
+  proximityVoters.textContent = `${household.voterCount} voter${household.voterCount === 1 ? '' : 's'}`;
+  proximityBar.classList.remove('hidden');
+}
+
+function hideProximityBar() {
+  nearestHousehold = null;
+  proximityBar.classList.add('hidden');
+}
+
+proximityOpenBtn.addEventListener('click', () => {
+  if (!nearestHousehold || !map) return;
+  map.flyTo({ center: [nearestHousehold.lon, nearestHousehold.lat], zoom: Math.max(map.getZoom(), 18) });
+  showHouseholdPopup(map, nearestHousehold);
+});
 
 openDB().then(async (db) => {
   const households = await getAll(db, 'households');

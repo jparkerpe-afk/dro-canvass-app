@@ -87,14 +87,7 @@ export function addHouseholdLayers(map) {
 
   map.on('click', 'household-pins', (e) => {
     const props = e.features[0].properties;
-    new maplibregl.Popup({ closeButton: true })
-      .setLngLat(e.lngLat)
-      .setHTML(
-        `<strong>${escapeHtml(props.address)}</strong><br>` +
-        `Status: ${escapeHtml(props.contact_status)}<br>` +
-        `Voters: ${props.voterCount}`
-      )
-      .addTo(map);
+    showHouseholdPopup(map, props, e.lngLat);
   });
 }
 
@@ -102,6 +95,87 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
+}
+
+export function showHouseholdPopup(map, household, lngLat) {
+  const at = lngLat || [household.lon, household.lat];
+  new maplibregl.Popup({ closeButton: true })
+    .setLngLat(at)
+    .setHTML(
+      `<strong>${escapeHtml(household.address)}</strong><br>` +
+      `Status: ${escapeHtml(household.contact_status)}<br>` +
+      `Voters: ${household.voterCount}`
+    )
+    .addTo(map);
+}
+
+// ---- Walker's own GPS position ----
+
+export function addWalkerLayer(map) {
+  map.addSource('walker', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+
+  map.addLayer({
+    id: 'walker-halo',
+    type: 'circle',
+    source: 'walker',
+    paint: { 'circle-radius': 14, 'circle-color': '#2196f3', 'circle-opacity': 0.25 },
+  });
+
+  map.addLayer({
+    id: 'walker-dot',
+    type: 'circle',
+    source: 'walker',
+    paint: {
+      'circle-radius': 6,
+      'circle-color': '#2196f3',
+      'circle-stroke-width': 2,
+      'circle-stroke-color': '#ffffff',
+    },
+  });
+}
+
+export function updateWalkerPosition(map, lat, lon) {
+  const source = map.getSource('walker');
+  if (!source) return;
+  source.setData({
+    type: 'FeatureCollection',
+    features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [lon, lat] }, properties: {} }],
+  });
+}
+
+// ---- Nearest-household proximity highlight ----
+
+export function addHighlightLayer(map) {
+  map.addSource('highlight', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+
+  map.addLayer({
+    id: 'highlight-ring',
+    type: 'circle',
+    source: 'highlight',
+    paint: {
+      'circle-radius': 16,
+      'circle-color': 'rgba(0,0,0,0)',
+      'circle-stroke-width': 3,
+      'circle-stroke-color': '#2196f3',
+    },
+  }, 'household-pins');
+}
+
+export function setHighlightedHousehold(map, household) {
+  const source = map.getSource('highlight');
+  if (!source) return;
+  source.setData({
+    type: 'FeatureCollection',
+    features: household
+      ? [{ type: 'Feature', geometry: { type: 'Point', coordinates: [household.lon, household.lat] }, properties: {} }]
+      : [],
+  });
 }
 
 export async function loadHouseholdFeatures(db) {
