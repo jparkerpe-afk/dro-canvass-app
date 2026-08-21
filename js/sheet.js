@@ -42,6 +42,7 @@ export function isLowConfidenceGeocode(accuracyType) {
 const sheetEl = document.getElementById('household-sheet');
 const addressEl = document.getElementById('sheet-address');
 const geoWarningEl = document.getElementById('sheet-geo-warning');
+const countyAddressEl = document.getElementById('sheet-county-address');
 const householdTagsEl = document.getElementById('sheet-household-tags');
 const statusButtonsEl = document.getElementById('status-buttons');
 const voterListEl = document.getElementById('voter-list');
@@ -50,11 +51,23 @@ const volunteerEl = document.getElementById('volunteer-interest');
 const notesEl = document.getElementById('household-notes');
 const savedEl = document.getElementById('sheet-saved');
 const closeBtn = document.getElementById('sheet-close');
+const pinStateEl = document.getElementById('pin-fix-state');
+const pinConfirmBtn = document.getElementById('pin-confirm');
+const pinHereBtn = document.getElementById('pin-standing-here');
+const pinUndoBtn = document.getElementById('pin-fix-undo');
 
 let currentHousehold = null;
 let onChangeCallback = null;
 let savedTimer = null;
 let notesTimer = null;
+
+// Latest accepted GPS fix, pushed in by app.js. Held here rather than read on
+// demand because getCurrentPosition() on a doorstep can take several seconds,
+// and the walker has already tapped — the watch is running anyway.
+let currentFix = null;
+export function setCurrentFix(fix) {
+  currentFix = fix;
+}
 
 function escapeHtml(str) {
   return String(str == null ? '' : str).replace(/[&<>"']/g, (c) => ({
@@ -106,6 +119,69 @@ function renderStatusButtons(activeStatus) {
     statusButtonsEl.appendChild(btn);
   }
 }
+
+// Phone GPS is roughly +-5-10m, less precise than a careful click on aerial
+// imagery. It cannot, however, pick the WRONG HOUSE, which is the error that
+// actually matters here — so a fix taken at the door beats a confident geocode.
+function renderPinFix(household) {
+  const status = household.pin_status || '';
+  const at = household.pin_fix_at ? new Date(household.pin_fix_at).toLocaleDateString() : '';
+  const by = household.pin_fix_by ? ` by ${household.pin_fix_by}` : '';
+
+  if (status === 'relocated') {
+    const acc = Number.isFinite(household.pin_fix_accuracy)
+      ? ` (±${Math.round(household.pin_fix_accuracy)} m)` : '';
+    pinStateEl.textContent = `Pin corrected in the field${by}${at ? ` on ${at}` : ''}${acc}.`;
+  } else if (status === 'confirmed') {
+    pinStateEl.textContent = `Pin confirmed at the door${by}${at ? ` on ${at}` : ''}.`;
+  } else {
+    pinStateEl.textContent = 'This pin came from the voter roll.';
+  }
+
+  pinConfirmBtn.classList.toggle('active', status === 'confirmed');
+  pinHereBtn.classList.toggle('active', status === 'relocated');
+  pinUndoBtn.classList.toggle('hidden', !status);
+}
+
+async function savePinFix(patch) {
+  await saveHousehold(patch);
+  renderPinFix(currentHousehold);
+}
+
+pinConfirmBtn.addEventListener('click', async () => {
+  const walkerName = await getWalkerNameSafe();
+  await savePinFix({
+    pin_status: 'confirmed',
+    pin_fix_lat: null, pin_fix_lon: null, pin_fix_accuracy: null,
+    pin_fix_at: new Date().toISOString(),
+    pin_fix_by: walkerName || null,
+  });
+});
+
+pinHereBtn.addEventListener('click', async () => {
+  if (!currentFix) {
+    // Never silently record the roll's own position as a correction — that
+    // would launder a bad pin into "canvasser confirmed" in the master.
+    pinStateEl.textContent = 'No GPS fix yet — wait for location, then tap again.';
+    return;
+  }
+  const walkerName = await getWalkerNameSafe();
+  await savePinFix({
+    pin_status: 'relocated',
+    pin_fix_lat: currentFix.lat,
+    pin_fix_lon: currentFix.lon,
+    pin_fix_accuracy: currentFix.accuracy,
+    pin_fix_at: new Date().toISOString(),
+    pin_fix_by: walkerName || null,
+  });
+});
+
+pinUndoBtn.addEventListener('click', async () => {
+  await savePinFix({
+    pin_status: null, pin_fix_lat: null, pin_fix_lon: null,
+    pin_fix_accuracy: null, pin_fix_at: null, pin_fix_by: null,
+  });
+});
 
 async function getWalkerNameSafe() {
   try {
@@ -181,6 +257,16 @@ export async function openSheet(householdId, onChange) {
   );
   geoWarningEl.classList.toggle('hidden', !lowConfidence);
 
+  // For ~34 households the roll names a street the county has no record of,
+  // while the pin sits on a house the county numbers identically on a
+  // neighbouring street. The roll stays verbatim above; this tells the walker
+  // what the street sign and the mailbox will actually say.
+  const countyAddress = (household.county_address || '').trim();
+  countyAddressEl.textContent = countyAddress
+    ? `County records this address as ${countyAddress}`
+    : '';
+  countyAddressEl.classList.toggle('hidden', !countyAddress);
+
   const hTags = household.tags || [];
   householdTagsEl.innerHTML = hTags
     .map((t) => `<span class="tag-badge ${escapeHtml(t)}">${escapeHtml(tagLabel(t))}</span>`)
@@ -188,6 +274,7 @@ export async function openSheet(householdId, onChange) {
   householdTagsEl.classList.toggle('hidden', hTags.length === 0);
 
   renderStatusButtons(household.contact_status);
+  renderPinFix(household);
   renderVoters(voters);
 
   signRequestEl.checked = !!household.sign_request;

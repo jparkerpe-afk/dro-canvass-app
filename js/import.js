@@ -120,6 +120,18 @@ export async function importCsvFile(file) {
       contacted_at: existing ? existing.contacted_at : null,
       contacted_by: existing ? existing.contacted_by : null,
       notes: existing ? existing.notes : '',
+      // Survives re-import for the same reason notes do: it comes from the
+      // annotations overlay, not the CSV, and a fresh roll would wipe it.
+      county_address: existing ? existing.county_address : '',
+      // Field pin corrections. The CSV's lat/lon overwrite `lat`/`lon` above,
+      // so the walker's GPS fix is kept in its own fields or a re-import of the
+      // roll would silently throw the correction away.
+      pin_status: existing ? existing.pin_status : null,
+      pin_fix_lat: existing ? existing.pin_fix_lat : null,
+      pin_fix_lon: existing ? existing.pin_fix_lon : null,
+      pin_fix_accuracy: existing ? existing.pin_fix_accuracy : null,
+      pin_fix_at: existing ? existing.pin_fix_at : null,
+      pin_fix_by: existing ? existing.pin_fix_by : null,
       sign_request: existing ? existing.sign_request : false,
       volunteer_interest: existing ? existing.volunteer_interest : false,
     });

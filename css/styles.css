@@ -423,6 +423,17 @@ section h2 {
   font-weight: 600;
 }
 
+/* The address above is the voter roll verbatim. This line is what the county
+   calls the same house — it is what the street sign will say, so the walker
+   needs it, but it must never look like the address of record. */
+.county-address {
+  margin: 0.4rem 0 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
 #sheet-close {
   flex-shrink: 0;
   font-size: 1.2rem;
@@ -477,6 +488,38 @@ section h2 {
   background: var(--rust);
   border-color: var(--rust);
   color: var(--white);
+}
+
+/* Pin correction. Stacked rather than side-by-side: these are pressed one-
+   handed on a doorstep, and "I'm standing here" needs a target big enough to
+   hit without looking. */
+.pin-fix-buttons {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.pin-btn {
+  padding: 0.95rem 0.6rem;
+  font-size: 0.98rem;
+  letter-spacing: 0.02em;
+  width: 100%;
+}
+
+.pin-btn.active {
+  background: var(--rust);
+  border-color: var(--rust);
+  color: var(--white);
+}
+
+.pin-btn.subtle {
+  margin-top: 0.6rem;
+  padding: 0.6rem;
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+
+#pin-fix-state {
+  margin: 0 0 0.7rem;
 }
 
 .voter-row {

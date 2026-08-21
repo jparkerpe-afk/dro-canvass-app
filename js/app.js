@@ -6,7 +6,7 @@ import {
   addHighlightLayer, setHighlightedHousehold, fitToHouseholds,
 } from './map.js';
 import { startWatching, stopWatching, findNearestHousehold, describeGeoError } from './geo.js';
-import { openSheet } from './sheet.js';
+import { openSheet, setCurrentFix } from './sheet.js';
 import { exportGeoJSON, exportCSV, exportBackup, exportSummary } from './export.js';
 import { applyAnnotationFile, AnnotationError } from './annotations.js';
 
@@ -218,9 +218,12 @@ function stopGps() {
   hideProximityBar();
 }
 
-function handleGpsFix({ lat, lon }) {
+function handleGpsFix({ lat, lon, accuracy }) {
   gpsStatusEl.classList.add('hidden');
   updateWalkerPosition(map, lat, lon);
+  // Feeds the sheet's "I'm standing here" button, which needs a fix already in
+  // hand the moment it is tapped.
+  setCurrentFix({ lat, lon, accuracy });
 
   const result = findNearestHousehold(lat, lon, cachedHouseholds);
   if (!result) {

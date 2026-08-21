@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DRO Pin Fixer</title>
+<link rel="stylesheet" href="/maplibre-gl.css">
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; }
+
+  #bar {
+    flex: none; background: #203864; color: #fff; padding: 10px 16px;
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  }
+  #addr { font-size: 24px; font-weight: 700; letter-spacing: 0.01em; }
+  #who { font-size: 13px; opacity: 0.85; }
+  #progress { font-size: 14px; margin-left: auto; white-space: nowrap; }
+  #hint {
+    flex: none; background: #fff8e1; border-bottom: 1px solid #f0e0a0;
+    padding: 7px 16px; font-size: 13px; color: #6b5900;
+  }
+  #hint.saved { background: #e8f5e9; border-color: #b6ddb9; color: #1b5e20; }
+  #hint.error { background: #ffebee; border-color: #f2b8b8; color: #b71c1c; }
+
+  #map { flex: 1; min-height: 0; }
+
+  #controls {
+    flex: none; display: flex; gap: 8px; padding: 10px 16px;
+    border-top: 1px solid #ddd; background: #fafafa; align-items: center; flex-wrap: wrap;
+  }
+  button {
+    font-size: 14px; padding: 9px 15px; border: 1px solid #b0b0b0; border-radius: 5px;
+    background: #fff; cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #f0f0f0; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.primary { background: #203864; color: #fff; border-color: #203864; font-weight: 600; }
+  button.primary:hover:not(:disabled) { background: #2b4a83; }
+  #done-note { font-size: 13px; color: #666; margin-left: auto; }
+
+  /* Reference labels drawn as HTML markers: MapLibre's text-field needs a
+     glyphs endpoint, which would be an extra network dependency. */
+  .ref {
+    font-size: 11px; line-height: 1; white-space: nowrap; pointer-events: none;
+    transform: translate(-50%, -50%); text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
+  }
+  .ref .dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    border: 1.5px solid #fff; vertical-align: middle; margin-right: 3px;
+  }
+  .ref.county .dot { background: #1565c0; }
+  .ref.county { color: #0d3c78; font-weight: 600; }
+  .ref.voter .dot { background: #2e7d32; }
+  .ref.voter { color: #1b5e20; }
+  .ref.manual .dot { background: #ef6c00; }
+  .ref.manual { color: #b34700; }
+
+  .legend {
+    position: absolute; z-index: 2; right: 10px; top: 10px; background: rgba(255,255,255,0.94);
+    border: 1px solid #ccc; border-radius: 5px; padding: 8px 10px; font-size: 12px; line-height: 1.7;
+  }
+  .legend b { display: block; margin-bottom: 2px; font-size: 11px; text-transform: uppercase; color: #666; }
+  .sw { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid #fff; margin-right: 5px; }
+  #maprap { position: relative; flex: 1; min-height: 0; display: flex; }
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <div>
+    <div id="addr">Loading…</div>
+    <div id="who"></div>
+  </div>
+  <div id="progress"></div>
+</div>
+
+<div id="hint">Click the correct rooftop on the map. Blue labels are county-verified addresses — use them to read the numbering.</div>
+
+<div id="maprap">
+  <div id="map"></div>
+  <div class="legend">
+    <b>Reference</b>
+    <div><span class="sw" style="background:#c62828"></span>current (wrong) pin</div>
+    <div><span class="sw" style="background:#1565c0"></span>county address point</div>
+    <div><span class="sw" style="background:#2e7d32"></span>verified household</div>
+    <div><span class="sw" style="background:#ef6c00"></span>hand-placed household</div>
+  </div>
+</div>
+
+<div id="controls">
+  <button id="prev">&larr; Back</button>
+  <button id="skip">Skip</button>
+  <button id="undo" title="Clear the fixed flag on this address">Un-fix this one</button>
+  <button id="recenter">Re-centre</button>
+  <button id="next" class="primary">Next &rarr;</button>
+  <span id="done-note"></span>
+</div>
+
+<script src="/maplibre-gl.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var state = { todo: [], done: [], refPoints: [], verifiedPoints: [] };
+  var idx = 0;
+  var refMarkers = [];
+  var currentMarker = null;
+  var placedMarker = null;
+
+  var el = {
+    addr: document.getElementById('addr'),
+    who: document.getElementById('who'),
+    progress: document.getElementById('progress'),
+    hint: document.getElementById('hint'),
+    prev: document.getElementById('prev'),
+    next: document.getElementById('next'),
+    skip: document.getElementById('skip'),
+    undo: document.getElementById('undo'),
+    recenter: document.getElementById('recenter'),
+    doneNote: document.getElementById('done-note'),
+  };
+
+  function setHint(msg, kind) {
+    el.hint.textContent = msg;
+    el.hint.className = kind || '';
+  }
+
+  // Google Hybrid — the same tile source the DRO QGIS project uses. Chosen
+  // because its imagery has house numbers rendered onto the roofs, which is
+  // the entire point: it is the only ground truth available for addresses the
+  // county layer does not contain.
+  var map = new maplibregl.Map({
+    container: 'map',
+    style: {
+      version: 8,
+      sources: {
+        sat: {
+          type: 'raster',
+          tiles: ['https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'],
+          tileSize: 256,
+          maxzoom: 20,
+          attribution: 'Imagery &copy; Google',
+        },
+      },
+      layers: [{ id: 'sat', type: 'raster', source: 'sat' }],
+    },
+    center: [-121.8385, 36.5938],
+    zoom: 19,
+    maxZoom: 21,
+  });
+  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
+
+  function current() { return state.todo[idx]; }
+
+  function metersBetween(aLat, aLon, bLat, bLon) {
+    var R = 6371000, toRad = function (d) { return d * Math.PI / 180; };
+    var dLat = toRad(bLat - aLat), dLon = toRad(bLon - aLon);
+    var x = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  }
+
+  function clearMarkers() {
+    refMarkers.forEach(function (m) { m.remove(); });
+    refMarkers = [];
+    if (currentMarker) { currentMarker.remove(); currentMarker = null; }
+    if (placedMarker) { placedMarker.remove(); placedMarker = null; }
+  }
+
+  function addRefLabel(pt, cls) {
+    var d = document.createElement('div');
+    d.className = 'ref ' + cls;
+    d.innerHTML = '<span class="dot"></span>' + pt.label;
+    var m = new maplibregl.Marker({ element: d }).setLngLat([pt.lon, pt.lat]).addTo(map);
+    refMarkers.push(m);
+  }
+
+  // Only nearby references get drawn — the full set is ~1300 labels, which
+  // would bury the imagery and slow the map for no benefit.
+  var REF_RADIUS_M = 130;
+
+  function renderCurrent(recenterMap) {
+    var h = current();
+    clearMarkers();
+
+    if (!h) {
+      el.addr.textContent = 'All done';
+      el.who.textContent = '';
+      el.progress.textContent = state.done.length + ' fixed';
+      setHint(state.recheck
+        ? 'Every overlapping address has been reviewed. Re-run find-overlaps.ts to confirm none remain.'
+        : 'Every flagged address has been placed. Close this tab and reopen the layer in QGIS.', 'saved');
+      el.next.disabled = true; el.skip.disabled = true;
+      return;
+    }
+
+    el.addr.textContent = h.address.toUpperCase();
+    var who = h.voters.length + ' voter' + (h.voters.length === 1 ? '' : 's') +
+      ': ' + h.voters.join(', ');
+    if (h.overlaps && h.overlaps.length) {
+      who += '  —  shares this spot with ' + h.overlaps.map(function (o) {
+        return o.addr + ' (' + o.m + 'm)';
+      }).join(', ');
+    }
+    el.who.textContent = who;
+    el.progress.textContent = (idx + 1) + ' of ' + state.todo.length +
+      (state.recheck ? '   ·   recheck' : '   ·   ' + state.done.length + ' already fixed');
+
+    var red = document.createElement('div');
+    red.style.cssText = 'width:16px;height:16px;border-radius:50%;background:#c62828;' +
+      'border:3px solid #fff;box-shadow:0 0 0 1px #c62828;';
+    currentMarker = new maplibregl.Marker({ element: red })
+      .setLngLat([h.lon, h.lat]).addTo(map);
+
+    state.refPoints.forEach(function (p) {
+      if (metersBetween(h.lat, h.lon, p.lat, p.lon) < REF_RADIUS_M) addRefLabel(p, 'county');
+    });
+    state.verifiedPoints.forEach(function (p) {
+      // Skip the household being placed — its own label would sit under the
+      // red marker and read as if it were already correct.
+      if (p.label === h.address) return;
+      if (metersBetween(h.lat, h.lon, p.lat, p.lon) < REF_RADIUS_M) {
+        addRefLabel(p, p.manual ? 'manual' : 'voter');
+      }
+    });
+
+    if (recenterMap !== false) map.jumpTo({ center: [h.lon, h.lat], zoom: 19.5 });
+    if (state.recheck) {
+      setHint('RECHECK — ' + h.address + ' shares a spot with another address. ' +
+        'If this pin is on the right roof, press Next. If not, click the correct roof. ' +
+        'Blue = county point, green = verified, orange = hand-placed.');
+    } else {
+      setHint('Click the correct rooftop for ' + h.address +
+        '. Blue = county address point, green = verified household, orange = hand-placed.');
+    }
+    el.next.disabled = false; el.skip.disabled = false;
+  }
+
+  map.on('click', function (e) {
+    var h = current();
+    if (!h) return;
+    var lat = e.lngLat.lat, lon = e.lngLat.lng;
+
+    if (placedMarker) placedMarker.remove();
+    var g = document.createElement('div');
+    g.style.cssText = 'width:18px;height:18px;border-radius:50%;background:#2e7d32;' +
+      'border:3px solid #fff;box-shadow:0 0 0 1px #2e7d32;';
+    placedMarker = new maplibregl.Marker({ element: g }).setLngLat([lon, lat]).addTo(map);
+
+    var moved = Math.round(metersBetween(h.lat, h.lon, lat, lon));
+    setHint('Saving ' + h.address + ' (' + moved + 'm from the old pin)…');
+
+    fetch('/api/fix', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ address: h.address, lat: lat, lon: lon }),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (!res.ok) { setHint('Save failed: ' + res.error, 'error'); return; }
+      setHint('Saved ' + h.address + ' — moved ' + moved + 'm. Loading next…', 'saved');
+      h.lat = lat; h.lon = lon;
+      state.todo.splice(idx, 1);
+      state.done.push(h);
+      if (idx >= state.todo.length) idx = Math.max(0, state.todo.length - 1);
+      setTimeout(function () { renderCurrent(true); }, 350);
+    }).catch(function (err) {
+      setHint('Save failed: ' + err.message, 'error');
+    });
+  });
+
+  el.next.addEventListener('click', function () {
+    if (!state.todo.length) return;
+    idx = (idx + 1) % state.todo.length;
+    renderCurrent(true);
+  });
+  el.skip.addEventListener('click', function () {
+    if (!state.todo.length) return;
+    idx = (idx + 1) % state.todo.length;
+    renderCurrent(true);
+  });
+  el.prev.addEventListener('click', function () {
+    if (!state.todo.length) return;
+    idx = (idx - 1 + state.todo.length) % state.todo.length;
+    renderCurrent(true);
+  });
+  el.recenter.addEventListener('click', function () { renderCurrent(true); });
+
+  el.undo.addEventListener('click', function () {
+    var addr = prompt('Clear the "fixed" flag for which address?\n(exact address as shown in the header)');
+    if (!addr) return;
+    fetch('/api/revert', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ address: addr }),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (!res.ok) { setHint('Un-fix failed: ' + res.error, 'error'); return; }
+      setHint('Cleared the fixed flag on ' + addr + ' — reloading.', 'saved');
+      setTimeout(load, 400);
+    });
+  });
+
+  function load() {
+    return fetch('/api/state').then(function (r) { return r.json(); }).then(function (s) {
+      state = s;
+      idx = 0;
+      el.doneNote.textContent = 'writing to DRO_Voter_PinFix_2026-07-26.gpkg';
+      renderCurrent(true);
+    }).catch(function (err) {
+      setHint('Could not load data: ' + err.message, 'error');
+    });
+  }
+
+  // Deliberately not gated on the map's 'load' event. That event never fires
+  // if the basemap cannot initialise — no WebGL, tiles unreachable, a
+  // zero-size container — and gating on it leaves the page stuck on
+  // "Loading…" forever with nothing explaining why. Markers attach fine to a
+  // map that has not finished loading, so the address list, the collision
+  // details and the controls all stay usable even with no imagery.
+  load();
+})();
+</script>
+</body>
+</html>

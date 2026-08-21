@@ -67,6 +67,13 @@ export async function exportGeoJSON() {
         properties: {
           household_id: h.id,
           address: h.address,
+          county_address: h.county_address || '',
+          pin_status: h.pin_status || '',
+          pin_fix_lat: h.pin_fix_lat ?? '',
+          pin_fix_lon: h.pin_fix_lon ?? '',
+          pin_fix_accuracy: h.pin_fix_accuracy ?? '',
+          pin_fix_at: h.pin_fix_at || '',
+          pin_fix_by: h.pin_fix_by || '',
           contact_status: h.contact_status || 'not_visited',
           contacted_at: h.contacted_at || '',
           contacted_by: h.contacted_by || '',
@@ -105,7 +112,8 @@ export async function exportGeoJSON() {
 // ---- CSV: one row per voter, household fields repeated ----
 
 const CSV_COLUMNS = [
-  'household_id', 'address', 'latitude', 'longitude',
+  'household_id', 'address', 'county_address', 'latitude', 'longitude',
+  'pin_status', 'pin_fix_lat', 'pin_fix_lon', 'pin_fix_accuracy', 'pin_fix_at', 'pin_fix_by',
   'contact_status', 'contacted_at', 'contacted_by',
   'sign_request', 'volunteer_interest', 'notes', 'household_tags',
   'voter_name', 'party', 'age', 'activity_level', 'support_level',
@@ -129,7 +137,9 @@ export async function exportCSV() {
 
   for (const h of households) {
     const householdCells = [
-      h.id, h.address, h.lat, h.lon,
+      h.id, h.address, h.county_address || '', h.lat, h.lon,
+      h.pin_status || '', h.pin_fix_lat ?? '', h.pin_fix_lon ?? '',
+      h.pin_fix_accuracy ?? '', h.pin_fix_at || '', h.pin_fix_by || '',
       h.contact_status || 'not_visited', h.contacted_at || '', h.contacted_by || '',
       h.sign_request ? 'true' : 'false',
       h.volunteer_interest ? 'true' : 'false',

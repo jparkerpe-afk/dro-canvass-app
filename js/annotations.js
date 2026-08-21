@@ -78,7 +78,7 @@ export async function applyAnnotationFile(file) {
   }
 
   const stats = {
-    householdsTouched: 0, notesAdded: 0, householdTags: 0,
+    householdsTouched: 0, notesAdded: 0, householdTags: 0, countyAddresses: 0,
     votersTagged: 0, votersAdded: 0, pinsCorrected: 0,
     unmatchedAddresses: [], unmatchedVoters: [],
   };
@@ -101,6 +101,15 @@ export async function applyAnnotationFile(file) {
       const next = appendNote(household.notes, entry.note_append);
       if (next !== (household.notes || '')) stats.notesAdded++;
       patch.notes = next;
+    }
+    // Deliberately NOT written into `address`: the roll is kept verbatim and
+    // this rides alongside it. Straight assignment rather than an append,
+    // because re-running a corrected annotation file should replace the old
+    // note, not stack a second one under it.
+    if (entry.county_address) {
+      const next = String(entry.county_address).trim();
+      if (next !== (household.county_address || '')) stats.countyAddresses++;
+      patch.county_address = next;
     }
     if (Number.isFinite(entry.lat) && Number.isFinite(entry.lon)) {
       patch.lat = entry.lat;
