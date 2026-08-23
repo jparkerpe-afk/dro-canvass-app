@@ -21,7 +21,7 @@ const NEAR_M = 10;
 // refresh the master is the live source, and merge-pins-into-master.ts has
 // folded the imagery pin work into it.
 const SRC = "C:/DRO/Data/v3 Voter Data Edit.gpkg";
-const OUT = "C:/DRO/CanvassApp/data/annotations_county_address_2026-08-21.json";
+const OUT = "C:/DRO/CanvassApp/data/annotations_county_address_2026-08-23.json";
 
 const SUF = new Set(["PLACE","PL","ROAD","RD","AVENUE","AVE","DRIVE","DR","COURT","CT","CIRCLE","CIR",
   "STREET","ST","HIGHWAY","HWY","WAY","LANE","LN","TERRACE","TER","BOULEVARD","BLVD"]);
@@ -86,13 +86,27 @@ function suffixFor(street:string, countySuffix:string){
 }
 
 // ---- match --------------------------------------------------------------------
-const entries:any[]=[]; const bare:string[]=[];
+// Every address the roll already uses, so a candidate that is ALREADY some other
+// household's address can be rejected. Without this the detector happily claimed
+// "3 Quendale is really 3 Baxter" while 3 Baxter Pl had its own family living in
+// it -- on Quendale the county layer has 5 address points against 13 households,
+// so corner parcels matched onto their neighbours. onX tax-address data confirmed
+// the roll's street was right and the note was wrong. Never drop this check.
+const claimed=new Set(hh.filter(h=>h.num).map(h=>`${h.num}|${h.street}`));
+
+const entries:any[]=[]; const bare:string[]=[]; const rejected:string[]=[];
 for(const h of hh){
   if(!h.num) continue;
   if(county.some(c=>c.num===h.num && same(c.street,h.street))) continue;  // roll and county agree
   const best=county.filter(c=>c.num===h.num && !same(c.street,h.street))
     .map(c=>({...c, m:Math.hypot(c.E-h.E,c.N-h.N)*0.3048}))
-    .filter(c=>c.m<=NEAR_M).sort((a,b)=>a.m-b.m)[0];
+    .filter(c=>c.m<=NEAR_M)
+    .filter(c=>{
+      const taken=[...claimed].some(k=>{const [n,s]=k.split("|"); return n===c.num && same(s,c.street);});
+      if(taken) rejected.push(`${h.addr} -> ${c.num} ${title(c.street)} (already a household's address)`);
+      return !taken;
+    })
+    .sort((a,b)=>a.m-b.m)[0];
   if(!best) continue;
   const suf=suffixFor(best.street,best.suffix);
   if(!suf) bare.push(`${best.num} ${title(best.street)}`);
@@ -104,6 +118,22 @@ for(const h of hh){
 }
 entries.sort((a,b)=>a._metres-b._metres);
 
+// Retractions. Any address that carried a note in a previous file but earns none
+// now must be told to clear it -- phones keep whatever they were last given, so
+// simply omitting the entry would leave a note we now know to be wrong sitting on
+// the walker's screen indefinitely.
+// The last file handed to a walker. Must NOT be the file being written, or the
+// diff compares the output against itself and retracts nothing.
+const PRIOR = "C:/DRO/CanvassApp/data/annotations_county_address_2026-08-21.json";
+const nowHas = new Set(entries.map(e=>norm(e.address)));
+let clears:any[] = [];
+try {
+  const prior = JSON.parse(Deno.readTextFileSync(PRIOR));
+  clears = (prior.entries ?? [])
+    .filter((e:any)=>e.county_address && !nowHas.has(norm(e.address)))
+    .map((e:any)=>({ address: e.address, county_address: "", _was: e.county_address }));
+} catch { /* no prior file: nothing to retract */ }
+
 const out={
   format: "dro-canvass-annotations",
   version: 1,
@@ -112,13 +142,24 @@ const out={
     `this only adds the county's name for the same house, which is what the street `+
     `sign and mailbox will say. Generated from DROAddresses.gpkg (county address `+
     `points) matched against hand-verified pin positions; every match is the same `+
-    `house number on a different street within ${NEAR_M}m of the pin.`,
+    `house number on a different street within ${NEAR_M}m of the pin, and is rejected `+
+    `if that address already belongs to another household. `+
+    (clears.length ? `Also RETRACTS ${clears.length} note(s) issued previously and since `+
+      `found to be wrong (blank county_address clears the note on the phone).` : ``),
   generated_at: new Date().toISOString(),
-  entries: entries.map(({_voters,_metres,...e})=>e),
+  entries: [...entries, ...clears].map(({_voters,_metres,_was,...e}:any)=>e),
 };
 Deno.writeTextFileSync(OUT, JSON.stringify(out,null,2)+"\n");
 
-console.log(`wrote ${entries.length} entries -> ${OUT}\n`);
+console.log(`wrote ${entries.length} note(s) + ${clears.length} retraction(s) -> ${OUT}\n`);
 for(const e of entries)
   console.log(`  ${String(e._metres).padStart(4)}m  ${e.address.padEnd(26)} ${String(e._voters).padStart(2)}v  ->  ${e.county_address}`);
+if(clears.length){
+  console.log(`\nRETRACTED (note cleared on the phone):`);
+  for(const c of clears) console.log(`   ${c.address.padEnd(26)} was "${c._was}"`);
+}
 if(bare.length) console.log(`\nNOTE - rendered with no street suffix: ${[...new Set(bare)].join(", ")}`);
+if(rejected.length){
+  console.log(`\nREJECTED - candidate address already belongs to another household (${rejected.length}):`);
+  for(const r of [...new Set(rejected)]) console.log(`   ${r}`);
+}
