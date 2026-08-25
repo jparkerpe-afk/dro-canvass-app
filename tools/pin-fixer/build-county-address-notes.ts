@@ -21,7 +21,7 @@ const NEAR_M = 10;
 // refresh the master is the live source, and merge-pins-into-master.ts has
 // folded the imagery pin work into it.
 const SRC = "C:/DRO/Data/v3 Voter Data Edit.gpkg";
-const OUT = "C:/DRO/CanvassApp/data/annotations_county_address_2026-08-23.json";
+const OUT = "C:/DRO/CanvassApp/data/annotations_county_address_2026-08-24.json";
 
 const SUF = new Set(["PLACE","PL","ROAD","RD","AVENUE","AVE","DRIVE","DR","COURT","CT","CIRCLE","CIR",
   "STREET","ST","HIGHWAY","HWY","WAY","LANE","LN","TERRACE","TER","BOULEVARD","BLVD"]);
@@ -94,6 +94,23 @@ function suffixFor(street:string, countySuffix:string){
 // the roll's street was right and the note was wrong. Never drop this check.
 const claimed=new Set(hh.filter(h=>h.num).map(h=>`${h.num}|${h.street}`));
 
+// The county tags cul-de-sac corner parcels with a PLACEHOLDER label rather than
+// a real address -- "2 PORTOLA" on a street numbered 817-1069, or "917 BORONDA"
+// where Boronda stops at 13. Surfacing those to a walker as "the county records
+// this as 917 Boronda Way" sends them looking for a house that does not exist.
+// A label whose number falls outside its own street's range is not an address.
+const range=new Map<string,number[]>();
+for(const c of county){ const n=Number(c.num); if(isNaN(n)) continue;
+  if(!range.has(c.street)) range.set(c.street,[]); range.get(c.street)!.push(n); }
+function isPlaceholder(num:string, street:string){
+  const ns=range.get(street); if(!ns||!ns.length) return false;
+  const n=Number(num); if(isNaN(n)) return false;
+  const s=[...ns].sort((a,b)=>a-b);
+  const med=s[Math.floor(s.length/2)];
+  // an order-of-magnitude gap from the street's typical number
+  return (n<=2 && med>100) || (n>100 && med<100);
+}
+
 const entries:any[]=[]; const bare:string[]=[]; const rejected:string[]=[];
 for(const h of hh){
   if(!h.num) continue;
@@ -105,6 +122,11 @@ for(const h of hh){
       const taken=[...claimed].some(k=>{const [n,s]=k.split("|"); return n===c.num && same(s,c.street);});
       if(taken) rejected.push(`${h.addr} -> ${c.num} ${title(c.street)} (already a household's address)`);
       return !taken;
+    })
+    .filter(c=>{
+      const ph=isPlaceholder(c.num,c.street);
+      if(ph) rejected.push(`${h.addr} -> ${c.num} ${title(c.street)} (placeholder label, not a real address)`);
+      return !ph;
     })
     .sort((a,b)=>a.m-b.m)[0];
   if(!best) continue;
@@ -124,7 +146,7 @@ entries.sort((a,b)=>a._metres-b._metres);
 // the walker's screen indefinitely.
 // The last file handed to a walker. Must NOT be the file being written, or the
 // diff compares the output against itself and retracts nothing.
-const PRIOR = "C:/DRO/CanvassApp/data/annotations_county_address_2026-08-21.json";
+const PRIOR = "C:/DRO/CanvassApp/data/annotations_county_address_2026-08-23.json";
 const nowHas = new Set(entries.map(e=>norm(e.address)));
 let clears:any[] = [];
 try {

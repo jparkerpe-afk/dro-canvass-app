@@ -41,8 +41,14 @@ const CANVASS_STATUS: Record<string, string | null> = {
   talked: null, not_home: null, refused: null, not_visited: null,
 };
 
-const args = Deno.args.filter((a) => a !== "--apply");
+// Writing Canvass Status is destructive: export_canvassapp.ps1 drops every row
+// that has one, so the household vanishes from the next walk list. That is the
+// right outcome for a genuinely bad record, but it is not something to do on a
+// single tap at a door, so it needs an explicit opt-in.
+const FLAGS = new Set(["--apply", "--allow-soft-delete"]);
+const args = Deno.args.filter((a) => !FLAGS.has(a));
 const APPLY = Deno.args.includes("--apply");
+const ALLOW_SOFT_DELETE = Deno.args.includes("--allow-soft-delete");
 if (!args[0]) {
   console.error("usage: apply-canvass-feedback.ts <backup.json> [--apply]");
   Deno.exit(2);
@@ -88,8 +94,12 @@ for (const h of households) {
   const note = (h.notes ?? "").trim() || null;
   if (note) why.push("note");
 
-  const canvass = CANVASS_STATUS[h.contact_status] ?? null;
-  if (canvass) why.push(`canvass="${canvass}"`);
+  let canvass = CANVASS_STATUS[h.contact_status] ?? null;
+  if (canvass && !ALLOW_SOFT_DELETE) {
+    skipped.push(`${addr} -- would set Canvass Status "${canvass}" and drop ${rows} voter row(s) ` +
+      `from the walk list; re-run with --allow-soft-delete to apply`);
+    canvass = null;
+  } else if (canvass) why.push(`canvass="${canvass}"`);
 
   let pin: string|null = null, E: number|null = null, N: number|null = null;
   let lat: number|null = null, lon: number|null = null, moved: number|null = null;

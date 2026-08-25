@@ -81,10 +81,17 @@ console.log(`county has address points for Quendale numbers: ${[...countyQuendal
 console.log(`those are left untouched.\n`);
 
 const targets = (M.prepare(
-  `SELECT "Street Address" a, geom, COUNT(*) n FROM "${L}"
+  `SELECT "Street Address" a, geom, COUNT(*) n, "Pin Status" p, "Location Confidence" c FROM "${L}"
    WHERE UPPER("Street Address") LIKE '% QUENDALE%' GROUP BY a`).all() as any[])
   .filter(r => r.geom)
-  .filter(r => !countyQuendale.has(String(r.a).match(/^(\d+)/)?.[1] ?? ""));
+  .filter(r => !countyQuendale.has(String(r.a).match(/^(\d+)/)?.[1] ?? ""))
+  // Never park a household a canvasser has stood in front of.
+  .filter(r => {
+    const v = /confirmed correct/i.test(String(r.p ?? "")) ||
+              /canvasser confirmed/i.test(String(r.c ?? ""));
+    if (v) console.log(`  skipping ${String(r.a).trim()} -- confirmed at the door`);
+    return !v;
+  });
 
 type Plan = { addr:string; rows:number; E:number; N:number; move:number; before:number };
 const plan: Plan[] = [];
