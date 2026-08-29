@@ -21,7 +21,7 @@ const NEAR_M = 10;
 // refresh the master is the live source, and merge-pins-into-master.ts has
 // folded the imagery pin work into it.
 const SRC = "C:/DRO/Data/v3 Voter Data Edit.gpkg";
-const OUT = "C:/DRO/CanvassApp/data/annotations_county_address_2026-08-24.json";
+const OUT = "C:/DRO/CanvassApp/data/annotations_county_address_2026-08-29.json";
 
 const SUF = new Set(["PLACE","PL","ROAD","RD","AVENUE","AVE","DRIVE","DR","COURT","CT","CIRCLE","CIR",
   "STREET","ST","HIGHWAY","HWY","WAY","LANE","LN","TERRACE","TER","BOULEVARD","BLVD"]);
@@ -146,7 +146,7 @@ entries.sort((a,b)=>a._metres-b._metres);
 // the walker's screen indefinitely.
 // The last file handed to a walker. Must NOT be the file being written, or the
 // diff compares the output against itself and retracts nothing.
-const PRIOR = "C:/DRO/CanvassApp/data/annotations_county_address_2026-08-23.json";
+const PRIOR = "C:/DRO/CanvassApp/data/annotations_county_address_2026-08-24.json";
 const nowHas = new Set(entries.map(e=>norm(e.address)));
 let clears:any[] = [];
 try {

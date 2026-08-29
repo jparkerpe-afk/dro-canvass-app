@@ -132,7 +132,9 @@ export async function importCsvFile(file) {
       pin_fix_accuracy: existing ? existing.pin_fix_accuracy : null,
       pin_fix_at: existing ? existing.pin_fix_at : null,
       pin_fix_by: existing ? existing.pin_fix_by : null,
-      sign_request: existing ? existing.sign_request : false,
+      // Yard sign: recorded in the field, so it must survive a roll refresh
+      // exactly as notes and pin fixes do.
+      sign: existing ? !!existing.sign : false,
       volunteer_interest: existing ? existing.volunteer_interest : false,
     });
   }

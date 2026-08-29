@@ -43,6 +43,9 @@ const STATUS_COLORS = {
   wrong_address: '#6d4c41',
 };
 
+// The campaign rust, so a sign reads as ours rather than as another status.
+const SIGN_COLOR = '#8B371A';
+
 export function initMap(containerId) {
   const map = new maplibregl.Map({
     container: containerId,
@@ -99,6 +102,22 @@ export function addHouseholdLayers(map, onHouseholdClick) {
   map.addSource('households', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
+  });
+
+  // Yard signs, drawn UNDER the status pin as a ring around it. A separate layer
+  // rather than a pin colour, because where the sign is and how the door went are
+  // two different questions and the walker needs both at once.
+  map.addLayer({
+    id: 'household-sign',
+    type: 'circle',
+    source: 'households',
+    filter: ['==', ['get', 'sign'], true],
+    paint: {
+      'circle-radius': 15,
+      'circle-color': 'rgba(0,0,0,0)',
+      'circle-stroke-width': 4,
+      'circle-stroke-color': SIGN_COLOR,
+    },
   });
 
   map.addLayer({
@@ -245,6 +264,7 @@ export async function loadHouseholdFeatures(db) {
           id: h.id,
           address: h.address,
           contact_status: h.contact_status,
+          sign: !!h.sign,
           voterCount: activeVoterCount.get(h.id) || 0,
         },
       })),

@@ -156,8 +156,19 @@ if (APPLY) {
                         "Location Confidence"='Verified (canvasser confirmed)'
                         WHERE "Street Address"=:a`).run({ p: a.pin, a: a.addr });
       }
-      if (a.note !== null)
-        M.prepare(`UPDATE "${L}" SET "Notes"=:v WHERE "Street Address"=:a`).run({ v: a.note, a: a.addr });
+      if (a.note !== null) {
+        // MERGE, never overwrite. The master carries lines the phone has never
+        // seen -- onX ownership findings, and corrections to what a resident
+        // said at the door -- and a walker's export would otherwise erase them.
+        // 811 Avalon is the worked example: the phone still says "Not registered
+        // to vote", which the master has since annotated as untrue.
+        const cur = String((M.prepare(`SELECT Notes n FROM "${L}" WHERE "Street Address"=? LIMIT 1`)
+          .get(a.addr) as any)?.n ?? "");
+        const lines = (s: string) => s.split("\n").map(x => x.trim()).filter(Boolean);
+        const app = lines(a.note), master = lines(cur);
+        const merged = [...app, ...master.filter(l => !app.includes(l))].join("\n");
+        M.prepare(`UPDATE "${L}" SET "Notes"=:v WHERE "Street Address"=:a`).run({ v: merged, a: a.addr });
+      }
       if (a.canvass !== null)
         M.prepare(`UPDATE "${L}" SET "Canvass Status"=:v WHERE "Street Address"=:a`).run({ v: a.canvass, a: a.addr });
     }

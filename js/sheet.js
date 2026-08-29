@@ -46,7 +46,7 @@ const countyAddressEl = document.getElementById('sheet-county-address');
 const householdTagsEl = document.getElementById('sheet-household-tags');
 const statusButtonsEl = document.getElementById('status-buttons');
 const voterListEl = document.getElementById('voter-list');
-const signRequestEl = document.getElementById('sign-request');
+const signEl = document.getElementById('sign');
 const volunteerEl = document.getElementById('volunteer-interest');
 const notesEl = document.getElementById('household-notes');
 const savedEl = document.getElementById('sheet-saved');
@@ -277,7 +277,7 @@ export async function openSheet(householdId, onChange) {
   renderPinFix(household);
   renderVoters(voters);
 
-  signRequestEl.checked = !!household.sign_request;
+  signEl.checked = !!household.sign;
   volunteerEl.checked = !!household.volunteer_interest;
   notesEl.value = household.notes || '';
 
@@ -305,8 +305,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && isSheetOpen()) closeSheet();
 });
 
-signRequestEl.addEventListener('change', () => {
-  saveHousehold({ sign_request: signRequestEl.checked });
+signEl.addEventListener('change', () => {
+  saveHousehold({ sign: signEl.checked });
 });
 
 volunteerEl.addEventListener('change', () => {
