@@ -20,3 +20,6 @@ Thumbs.db
 
 # Local tool config
 .claude/
+
+# Local review report — contains addresses and voter counts.
+review-report.html

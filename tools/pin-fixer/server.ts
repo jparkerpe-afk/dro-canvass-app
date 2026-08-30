@@ -24,7 +24,10 @@
 import { Database } from "jsr:@db/sqlite@0.12";
 import { fwd, inv, parsePt, buildPt } from "./proj.ts";
 
-const VOTER_GPKG = "C:/DRO/Data/DRO_Voter_PinFix_2026-07-26.gpkg";
+// The live master. Since the 2026 roll refresh this is the source of truth;
+// the old DRO_Voter_PinFix copy is a July snapshot and writing to it now would
+// strand the correction.
+const VOTER_GPKG = "C:/DRO/Data/v3 Voter Data Edit.gpkg";
 const ADDR_GPKG = "C:/DRO/Data/DROAddresses.gpkg";
 const LAYER = "dro_voter_master_final_v3";
 const PORT = 8777;
@@ -102,6 +105,92 @@ type Household = {
 };
 
 const RECHECK = Deno.args.includes("--recheck");
+
+// --review <backup.json>  : step through the households actually walked, in
+// street order, and judge each pin. This is the mode that matters after a walk
+// where the map felt wrong: the walker has just seen these houses, so their
+// verdict is ground truth, and "the pin is right" is as valuable to record as
+// "the pin is wrong" -- a confirmed pin is one the tools will never touch again.
+const REVIEW_IDX = Deno.args.indexOf("--review");
+const REVIEW_FILE = REVIEW_IDX >= 0 ? Deno.args[REVIEW_IDX + 1] : null;
+// Optional street filter, e.g. --street "Portola"
+const STREET_IDX = Deno.args.indexOf("--street");
+const STREET = STREET_IDX >= 0 ? (Deno.args[STREET_IDX + 1] ?? "").toUpperCase() : null;
+
+function reviewAddresses(): string[] {
+  if (!REVIEW_FILE) return [];
+  const b = JSON.parse(Deno.readTextFileSync(REVIEW_FILE));
+  const walked = (b.households ?? [])
+    .filter((h: any) => h.contact_status && h.contact_status !== "not_visited")
+    .map((h: any) => String(h.address ?? h.id).trim())
+    .filter((a: string) => !STREET || a.toUpperCase().includes(STREET));
+  // Street order, so the review runs the way the walk did rather than jumping
+  // around town.
+  const key = (a: string) => {
+    const m = a.match(/^(\d+)\s+(.*)$/);
+    return m ? [m[2].toUpperCase(), Number(m[1])] as const : [a.toUpperCase(), 0] as const;
+  };
+  return [...new Set<string>(walked)].sort((x, y) => {
+    const [sx, nx] = key(x), [sy, ny] = key(y);
+    return sx === sy ? nx - ny : sx.localeCompare(sy);
+  });
+}
+// --questionable : queue everything that is currently doubtful, worst first.
+// Condos and the out-of-coverage addresses are deliberately excluded: clicking a
+// roof cannot improve either (see build-review-report.ts for why), so putting
+// them in a click queue would only waste the operator's attention.
+const QUESTIONABLE = Deno.args.includes("--questionable");
+
+function questionableAddresses(): string[] {
+  const db = openVoters(true);
+  const rows = db.prepare(`
+    SELECT "Street Address" AS addr, geom, "Location Confidence" AS conf,
+           "Pin Status" AS pin, "Correction" AS rev
+    FROM "${LAYER}" GROUP BY addr
+  `).all() as any[];
+  db.close();
+  const CONDO = /QUAIL RUN|PHEASANT RIDGE/i;
+  const OUTSIDE = /CALLE DEL OAKS|MONTEREY SALINAS/i;
+  const verified = (r: any) =>
+    String(r.pin ?? "") === "Confirmed correct" || /canvasser confirmed/i.test(String(r.conf ?? ""));
+
+  // Already looked at in a previous pass -- do not re-serve it. Pass
+  // --include-reviewed to go over them again anyway.
+  const reviewed = (r: any) => /pin reviewed/i.test(String(r.rev ?? ""));
+  const AGAIN = Deno.args.includes("--include-reviewed");
+  const live = rows.filter((r) => r.geom && !CONDO.test(r.addr) && !OUTSIDE.test(r.addr)
+    && !verified(r) && (AGAIN || !reviewed(r)));
+  // stacked: two households sharing one position
+  const byPos = new Map<string, any[]>();
+  for (const r of live) { const p = parsePt(r.geom); const k = `${p.E.toFixed(2)},${p.N.toFixed(2)}`;
+    if (!byPos.has(k)) byPos.set(k, []); byPos.get(k)!.push(r); }
+  const stacked = new Set<string>();
+  for (const [, g] of byPos) {
+    if (g.length < 2) continue;
+    if (g.some((x) => /APT|UNIT/i.test(x.addr))) continue;  // flats in one building
+    for (const x of g) stacked.add(String(x.addr).trim());
+  }
+  const approx = live
+    .filter((r) => /approximate|estimated/i.test(String(r.conf ?? "")))
+    .map((r) => String(r.addr).trim())
+    .filter((a) => !stacked.has(a));
+
+  const street = (a: string) => { const m = a.match(/^(\d+)\s+(.*)$/);
+    return m ? [m[2].toUpperCase(), Number(m[1])] as const : [a.toUpperCase(), 0] as const; };
+  const bySt = (x: string, y: string) => { const [sx,nx]=street(x), [sy,ny]=street(y);
+    return sx === sy ? nx - ny : sx.localeCompare(sy); };
+  // worst first: two households on one roof beats a lone uncertain pin
+  const list = [...[...stacked].sort(bySt), ...approx.sort(bySt)];
+  console.log(`Questionable mode: ${stacked.size} stacked + ${approx.length} unconfirmed = ${list.length}`);
+  return list;
+}
+
+const REVIEW_ADDRESSES = QUESTIONABLE ? questionableAddresses() : reviewAddresses();
+const REVIEW = REVIEW_ADDRESSES.length > 0;
+if (REVIEW && !QUESTIONABLE) {
+  console.log(`Review mode: ${REVIEW_ADDRESSES.length} household(s) walked` +
+    (STREET ? ` on ${STREET}` : "") + `, in street order.`);
+}
 // Two households on one roof, within this distance, are treated as suspect.
 const OVERLAP_METERS = 5;
 
@@ -178,7 +267,14 @@ function loadHouseholds(): { todo: Household[]; done: Household[] } {
   // In recheck mode the Pin Status filter is deliberately bypassed: these
   // addresses have already been "fixed" once, so the normal query would put
   // every one of them in `done` and leave nothing to review.
-  const rows = RECHECK
+  const rows = REVIEW
+    ? db.prepare(`
+        SELECT fid, geom, "Street Address" AS addr, "Voter Name" AS name,
+               "Location Confidence" AS conf, "Pin Status" AS pin
+        FROM "${LAYER}"
+        WHERE "Street Address" IN (${REVIEW_ADDRESSES.map((_, i) => `:a${i}`).join(",")})
+      `).all(Object.fromEntries(REVIEW_ADDRESSES.map((a, i) => [`a${i}`, a]))) as any[]
+    : RECHECK
     ? db.prepare(`
         SELECT fid, geom, "Street Address" AS addr, "Voter Name" AS name,
                "Location Confidence" AS conf, "Pin Status" AS pin
@@ -215,6 +311,15 @@ function loadHouseholds(): { todo: Household[]; done: Household[] } {
   }
 
   const all = [...byAddr.values()];
+  if (REVIEW) {
+    // Keep the walk's street order, and treat anything already confirmed at a
+    // door as finished so a second pass does not re-ask settled questions.
+    const order = new Map(REVIEW_ADDRESSES.map((a, i) => [a, i]));
+    all.sort((x, y) => (order.get(x.address) ?? 0) - (order.get(y.address) ?? 0));
+    const settled = (h: Household) =>
+      h.pinStatus === "Confirmed correct" || /canvasser confirmed/i.test(h.confidence ?? "");
+    return { todo: all.filter((h) => !settled(h)), done: all.filter(settled) };
+  }
   if (RECHECK) {
     const partners = computeOverlaps();
     for (const h of all) h.overlaps = partners.get(h.address) ?? [];
@@ -277,16 +382,42 @@ function applyFix(address: string, lat: number, lon: number) {
              "Geocodio Latitude" = :lat,
              "Geocodio Longitude" = :lon,
              "Pin Status" = :pin,
-             "Location Confidence" = :conf
+             "Location Confidence" = :conf,
+             "Correction" = :rev
        WHERE "Street Address" = :addr
     `);
     const changes = stmt.run({
       geom: buildPt(E, N),
       e: E, n: N, lat, lon,
       pin: PIN_STATUS_FIXED, conf: CONFIDENCE_FIXED,
+      // Stamp that a human has now LOOKED at this one. The confidence stays
+      // "Approximate" -- a roof clicked from imagery is not a door confirmation
+      // and the walker must still get the badge -- but without this the
+      // questionable queue re-serves every pin it was just given, and the pass
+      // never ends. Carried through pipeline runs, so the review is not lost.
+      rev: `pin reviewed ${new Date().toISOString().slice(0, 10)}`,
       addr: address,
     });
     return { changes, E, N };
+  } finally {
+    db.close();
+  }
+}
+
+// "The pin is right" -- recorded by someone who has just stood in front of the
+// house. This is the strongest statement in the whole dataset: it outranks the
+// county layer and the parcels, and every tool here refuses to move a pin
+// carrying it.
+function confirmPin(address: string) {
+  const db = openVoters(false);
+  try {
+    const changes = db.prepare(`
+      UPDATE "${LAYER}"
+      SET "Pin Status" = 'Confirmed correct',
+          "Location Confidence" = 'Verified (canvasser confirmed)'
+      WHERE "Street Address" = :addr
+    `).run({ addr: address });
+    return { changes };
   } finally {
     db.close();
   }
@@ -344,7 +475,8 @@ Deno.serve({ port: PORT, hostname: "127.0.0.1" }, async (req) => {
   if (url.pathname === "/api/state") {
     const { todo, done } = loadHouseholds();
     // Recomputed per request so a pin moved a moment ago shows in its new spot.
-    return json({ todo, done, refPoints, verifiedPoints: loadAllHouseholds(), recheck: RECHECK });
+    return json({ todo, done, refPoints, verifiedPoints: loadAllHouseholds(),
+                  recheck: RECHECK, review: REVIEW });
   }
 
   if (url.pathname === "/api/fix" && req.method === "POST") {
@@ -355,6 +487,18 @@ Deno.serve({ port: PORT, hostname: "127.0.0.1" }, async (req) => {
       return json({ ok: true, ...r });
     } catch (err) {
       console.error("fix failed:", (err as Error).message);
+      return json({ ok: false, error: (err as Error).message }, 400);
+    }
+  }
+
+  if (url.pathname === "/api/confirm" && req.method === "POST") {
+    try {
+      const { address } = await req.json();
+      const r = confirmPin(address);
+      console.log(`CONFIRMED ${address} (${r.changes} rows)`);
+      return json({ ok: true, ...r });
+    } catch (err) {
+      console.error("confirm failed:", (err as Error).message);
       return json({ ok: false, error: (err as Error).message }, 400);
     }
   }

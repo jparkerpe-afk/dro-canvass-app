@@ -109,10 +109,21 @@ function renderStatusButtons(activeStatus) {
     btn.addEventListener('click', async () => {
       const walkerName = await getWalkerNameSafe();
       const isClear = status.value === 'not_visited';
+      // Silently record where the walker was standing. No extra tap, because
+      // stopping to fix a pin at every door breaks the rhythm of a walk and
+      // simply will not happen. This is EVIDENCE, not a confirmation: they may
+      // tap from the pavement, or from the car ten minutes later. It never sets
+      // Pin Status -- reconciling a block from these is done off the phone,
+      // where the accuracy and the distance to the pin can be weighed.
+      const fix = (!isClear && currentFix) ? currentFix : null;
       await saveHousehold({
         contact_status: status.value,
         contacted_at: isClear ? null : new Date().toISOString(),
         contacted_by: isClear ? null : (walkerName || null),
+        stood_lat: fix ? fix.lat : (isClear ? null : currentHousehold.stood_lat ?? null),
+        stood_lon: fix ? fix.lon : (isClear ? null : currentHousehold.stood_lon ?? null),
+        stood_accuracy: fix ? fix.accuracy : (isClear ? null : currentHousehold.stood_accuracy ?? null),
+        stood_at: fix ? new Date().toISOString() : (isClear ? null : currentHousehold.stood_at ?? null),
       });
       renderStatusButtons(status.value);
     });

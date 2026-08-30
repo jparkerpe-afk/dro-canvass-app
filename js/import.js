@@ -135,6 +135,12 @@ export async function importCsvFile(file) {
       // Yard sign: recorded in the field, so it must survive a roll refresh
       // exactly as notes and pin fixes do.
       sign: existing ? !!existing.sign : false,
+      // Where the walker stood when they logged the outcome. Field-recorded, so
+      // it survives a roll refresh like everything else they produce.
+      stood_lat: existing ? (existing.stood_lat ?? null) : null,
+      stood_lon: existing ? (existing.stood_lon ?? null) : null,
+      stood_accuracy: existing ? (existing.stood_accuracy ?? null) : null,
+      stood_at: existing ? (existing.stood_at ?? null) : null,
       volunteer_interest: existing ? existing.volunteer_interest : false,
     });
   }

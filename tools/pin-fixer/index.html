@@ -77,7 +77,7 @@
   <div id="progress"></div>
 </div>
 
-<div id="hint">Click the correct rooftop on the map. Blue labels are county-verified addresses — use them to read the numbering.</div>
+<div id="hint">Is the red pin on the right house? If yes press <b>Pin is correct</b>. If not, click the correct rooftop. Blue labels are county addresses — use them to read the numbering.</div>
 
 <div id="maprap">
   <div id="map"></div>
@@ -92,7 +92,8 @@
 
 <div id="controls">
   <button id="prev">&larr; Back</button>
-  <button id="skip">Skip</button>
+  <button id="correct" class="primary">Pin is correct</button>
+  <button id="skip">Not sure — skip</button>
   <button id="undo" title="Clear the fixed flag on this address">Un-fix this one</button>
   <button id="recenter">Re-centre</button>
   <button id="next" class="primary">Next &rarr;</button>
@@ -109,6 +110,9 @@
   var refMarkers = [];
   var currentMarker = null;
   var placedMarker = null;
+  // True while a save is in flight and the map has not yet moved to the next
+  // household. Clicks are ignored until it clears.
+  var busy = false;
 
   var el = {
     addr: document.getElementById('addr'),
@@ -118,6 +122,7 @@
     prev: document.getElementById('prev'),
     next: document.getElementById('next'),
     skip: document.getElementById('skip'),
+    correct: document.getElementById('correct'),
     undo: document.getElementById('undo'),
     recenter: document.getElementById('recenter'),
     doneNote: document.getElementById('done-note'),
@@ -233,15 +238,24 @@
         'If this pin is on the right roof, press Next. If not, click the correct roof. ' +
         'Blue = county point, green = verified, orange = hand-placed.');
     } else {
-      setHint('Click the correct rooftop for ' + h.address +
-        '. Blue = county address point, green = verified household, orange = hand-placed.');
+      setHint(state.review
+        ? 'Is the red pin on the right house for ' + h.address + '? Press "Pin is correct", ' +
+          'or click the correct rooftop. Blue = county address point, green = verified.'
+        : 'Click the correct rooftop for ' + h.address +
+          '. Blue = county address point, green = verified household, orange = hand-placed.');
     }
     el.next.disabled = false; el.skip.disabled = false;
   }
 
   map.on('click', function (e) {
+    // Between a save and the redraw, the list has already advanced but the map
+    // still shows the house just placed. A second click in that window would
+    // save the NEXT household at the position of the previous one -- which is
+    // how 817/827 and 828/833 Portola ended up stacked on identical points.
+    if (busy) return;
     var h = current();
     if (!h) return;
+    busy = true;
     var lat = e.lngLat.lat, lon = e.lngLat.lng;
 
     if (placedMarker) placedMarker.remove();
@@ -258,15 +272,16 @@
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ address: h.address, lat: lat, lon: lon }),
     }).then(function (r) { return r.json(); }).then(function (res) {
-      if (!res.ok) { setHint('Save failed: ' + res.error, 'error'); return; }
+      if (!res.ok) { setHint('Save failed: ' + res.error, 'error'); busy = false; return; }
       setHint('Saved ' + h.address + ' — moved ' + moved + 'm. Loading next…', 'saved');
       h.lat = lat; h.lon = lon;
       state.todo.splice(idx, 1);
       state.done.push(h);
       if (idx >= state.todo.length) idx = Math.max(0, state.todo.length - 1);
-      setTimeout(function () { renderCurrent(true); }, 350);
+      setTimeout(function () { renderCurrent(true); busy = false; }, 350);
     }).catch(function (err) {
       setHint('Save failed: ' + err.message, 'error');
+      busy = false;
     });
   });
 
@@ -279,6 +294,31 @@
     if (!state.todo.length) return;
     idx = (idx + 1) % state.todo.length;
     renderCurrent(true);
+  });
+
+  // "Pin is correct" — recorded by someone who has just stood at the house.
+  // Marks it Confirmed correct, which every other tool now refuses to overwrite.
+  el.correct.addEventListener('click', function () {
+    var h = current();
+    if (!h) return;
+    el.correct.disabled = true;
+    fetch('/api/confirm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ address: h.address }),
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      el.correct.disabled = false;
+      if (!res.ok) { setHint('Confirm failed: ' + res.error, 'error'); return; }
+      setHint('Confirmed ' + h.address + ' — this pin will not be moved again.', 'saved');
+      // Drop it from the list rather than reloading, so the position in the
+      // walk is not lost.
+      state.todo.splice(idx, 1);
+      if (idx >= state.todo.length) idx = 0;
+      setTimeout(function () { renderCurrent(true); }, 300);
+    }).catch(function (err) {
+      el.correct.disabled = false;
+      setHint('Confirm failed: ' + err.message, 'error');
+    });
   });
   el.prev.addEventListener('click', function () {
     if (!state.todo.length) return;
@@ -305,7 +345,7 @@
     return fetch('/api/state').then(function (r) { return r.json(); }).then(function (s) {
       state = s;
       idx = 0;
-      el.doneNote.textContent = 'writing to DRO_Voter_PinFix_2026-07-26.gpkg';
+      el.doneNote.textContent = 'writing to v3 Voter Data Edit.gpkg (the live master)';
       renderCurrent(true);
     }).catch(function (err) {
       setHint('Could not load data: ' + err.message, 'error');

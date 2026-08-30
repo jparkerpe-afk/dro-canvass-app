@@ -78,6 +78,10 @@ export async function exportGeoJSON() {
           contacted_at: h.contacted_at || '',
           contacted_by: h.contacted_by || '',
           sign: !!h.sign,
+          stood_lat: h.stood_lat ?? '',
+          stood_lon: h.stood_lon ?? '',
+          stood_accuracy: h.stood_accuracy ?? '',
+          stood_at: h.stood_at || '',
           volunteer_interest: !!h.volunteer_interest,
           notes: h.notes || '',
           household_tags: (h.tags || []).join('; '),
@@ -116,6 +120,7 @@ const CSV_COLUMNS = [
   'pin_status', 'pin_fix_lat', 'pin_fix_lon', 'pin_fix_accuracy', 'pin_fix_at', 'pin_fix_by',
   'contact_status', 'contacted_at', 'contacted_by',
   'sign', 'volunteer_interest', 'notes', 'household_tags',
+  'stood_lat', 'stood_lon', 'stood_accuracy', 'stood_at',
   'voter_name', 'party', 'age', 'activity_level', 'support_level',
   'accuracy_type', 'stale', 'source', 'voter_tags',
 ];
@@ -145,6 +150,7 @@ export async function exportCSV() {
       h.volunteer_interest ? 'true' : 'false',
       h.notes || '',
       (h.tags || []).join('; '),
+      h.stood_lat ?? '', h.stood_lon ?? '', h.stood_accuracy ?? '', h.stood_at || '',
     ];
 
     const members = byHousehold.get(h.id) || [];
