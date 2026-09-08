@@ -21,7 +21,23 @@ const NEAR_M = 10;
 // refresh the master is the live source, and merge-pins-into-master.ts has
 // folded the imagery pin work into it.
 const SRC = "C:/DRO/Data/v3 Voter Data Edit.gpkg";
-const OUT = "C:/DRO/CanvassApp/data/annotations_county_address_2026-08-29.json";
+// Timestamped to the minute for the same reason as the CSV: a date-only name
+// silently reuses itself when the master changes twice in a day, and a phone
+// that already has that filename keeps the stale copy.
+const DIR = "C:/DRO/CanvassApp/data";
+const now = new Date();
+const p2 = (n: number) => String(n).padStart(2, "0");
+const STAMP = `${now.getFullYear()}-${p2(now.getMonth()+1)}-${p2(now.getDate())}_` +
+              `${p2(now.getHours())}${p2(now.getMinutes())}`;
+const OUT = `${DIR}/annotations_county_address_${STAMP}.json`;
+// The most recent previous file, whatever it is called -- so retractions are
+// always diffed against what the walker was last given.
+function findPrior(): string | null {
+  const f = [...Deno.readDirSync(DIR)]
+    .filter((e) => e.isFile && /^annotations_county_address_.*\.json$/.test(e.name))
+    .map((e) => e.name).sort();
+  return f.length ? `${DIR}/${f[f.length - 1]}` : null;
+}
 
 const SUF = new Set(["PLACE","PL","ROAD","RD","AVENUE","AVE","DRIVE","DR","COURT","CT","CIRCLE","CIR",
   "STREET","ST","HIGHWAY","HWY","WAY","LANE","LN","TERRACE","TER","BOULEVARD","BLVD"]);
@@ -144,12 +160,14 @@ entries.sort((a,b)=>a._metres-b._metres);
 // now must be told to clear it -- phones keep whatever they were last given, so
 // simply omitting the entry would leave a note we now know to be wrong sitting on
 // the walker's screen indefinitely.
-// The last file handed to a walker. Must NOT be the file being written, or the
-// diff compares the output against itself and retracts nothing.
-const PRIOR = "C:/DRO/CanvassApp/data/annotations_county_address_2026-08-24.json";
+// The last file handed to a walker, found by name. Resolved BEFORE the new file
+// is written, or the diff would compare the output against itself and retract
+// nothing.
+const PRIOR = findPrior();
 const nowHas = new Set(entries.map(e=>norm(e.address)));
 let clears:any[] = [];
 try {
+  if (!PRIOR) throw new Error("no prior file");
   const prior = JSON.parse(Deno.readTextFileSync(PRIOR));
   clears = (prior.entries ?? [])
     .filter((e:any)=>e.county_address && !nowHas.has(norm(e.address)))
@@ -173,7 +191,19 @@ const out={
 };
 Deno.writeTextFileSync(OUT, JSON.stringify(out,null,2)+"\n");
 
-console.log(`wrote ${entries.length} note(s) + ${clears.length} retraction(s) -> ${OUT}\n`);
+// Retire earlier annotation files so the Import screen only offers the current
+// one. The retractions above are already folded in, so an older file is not
+// just redundant, it is wrong.
+for (const e of [...Deno.readDirSync(DIR)]) {
+  if (!e.isFile) continue;
+  if (!/^annotations_county_address_.*\.json$/.test(e.name)) continue;
+  if (`${DIR}/${e.name}` === OUT) continue;
+  Deno.removeSync(`${DIR}/${e.name}`);
+  console.log(`  retired superseded notes: ${e.name}`);
+}
+
+console.log(`wrote ${entries.length} note(s) + ${clears.length} retraction(s) -> ${OUT}`);
+if (PRIOR) console.log(`  (retractions diffed against ${PRIOR.split("/").pop()})\n`); else console.log();
 for(const e of entries)
   console.log(`  ${String(e._metres).padStart(4)}m  ${e.address.padEnd(26)} ${String(e._voters).padStart(2)}v  ->  ${e.county_address}`);
 if(clears.length){

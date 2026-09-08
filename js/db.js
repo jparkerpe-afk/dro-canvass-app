@@ -45,6 +45,14 @@ export async function putAll(db, storeName, records) {
   await txDone(tx);
 }
 
+// Empties a store. Only used by restoreBackup, which replaces the whole canvass
+// rather than merging one walker's day into another's.
+export async function clearStore(db, storeName) {
+  const tx = db.transaction(storeName, 'readwrite');
+  tx.objectStore(storeName).clear();
+  await txDone(tx);
+}
+
 export function get(db, storeName, key) {
   return new Promise((resolve, reject) => {
     const req = db.transaction(storeName, 'readonly').objectStore(storeName).get(key);

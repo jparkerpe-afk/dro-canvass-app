@@ -1,5 +1,5 @@
 import { normalizeAddress, normalizeName, voterId } from './hash.js';
-import { openDB, getAll, putAll, getMeta, setMeta } from './db.js';
+import { openDB, getAll, putAll, getMeta, setMeta, clearStore } from './db.js';
 
 export const EXPECTED_HEADERS = [
   'Voter Name', 'Street Address', 'City', 'State', 'Zip', 'Party', 'Age', 'Activity Level',
@@ -163,6 +163,65 @@ export async function importCsvFile(file) {
   await setMeta(db, 'lastImportAt', new Date().toISOString());
 
   return stats;
+}
+
+// ---- Restore from a backup JSON ----
+//
+// HANDOFF.md has always called the backup "the only thing that can fully restore
+// a day's work", but until now nothing could read one back: a phone that died
+// took its canvass with it. This closes that. It is also how a walker's work
+// gets onto a desktop for review, since each browser keeps its own database and
+// the CSV only carries the roll, not what happened at the doors.
+
+export function readBackupFile(file) {
+  return file.text().then((text) => {
+    let b;
+    try { b = JSON.parse(text); }
+    catch { throw new ImportError('That is not a readable JSON file.'); }
+    if (b.format !== 'dro-canvass-backup') {
+      throw new ImportError(
+        `That is not a canvass backup (format "${b.format || 'missing'}"). ` +
+        'Backups are the files named dro_canvass_<walker>_<date>_backup.json.'
+      );
+    }
+    if (!Array.isArray(b.households) || !Array.isArray(b.voters)) {
+      throw new ImportError('That backup is missing its households or voters.');
+    }
+    const contacted = b.households.filter(
+      (h) => h.contact_status && h.contact_status !== 'not_visited').length;
+    const rated = b.voters.filter(
+      (v) => v.support_level && v.support_level !== 'unknown').length;
+    const walker = (b.meta || []).find((m) => m.key === 'walkerName');
+    return {
+      backup: b,
+      summary: {
+        households: b.households.length,
+        voters: b.voters.length,
+        contacted,
+        rated,
+        notes: b.households.filter((h) => (h.notes || '').trim()).length,
+        signs: b.households.filter((h) => h.sign).length,
+        exportedAt: b.exported_at || null,
+        appVersion: b.app_version || null,
+        walker: walker ? walker.value : null,
+      },
+    };
+  });
+}
+
+// Wholesale replace. A backup is a complete dump, so merging it into whatever is
+// already here would silently blend two walkers' days into one indistinguishable
+// state. Replacing is the honest operation, and the caller confirms first.
+export async function restoreBackup(backup) {
+  const db = await openDB();
+  await clearStore(db, 'voters');
+  await clearStore(db, 'households');
+  await putAll(db, 'households', backup.households);
+  await putAll(db, 'voters', backup.voters);
+  for (const m of backup.meta || []) {
+    if (m && m.key) await setMeta(db, m.key, m.value);
+  }
+  return { households: backup.households.length, voters: backup.voters.length };
 }
 
 export async function setWalkerName(name) {

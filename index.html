@@ -50,6 +50,16 @@
         <p id="walker-name-status" class="hint"></p>
       </section>
 
+      <section id="restore-section">
+        <h2>Restore from backup</h2>
+        <p class="hint">Loads a backup JSON exported from a phone — the whole canvass, exactly as it stood. Use it to see a walker's work on this machine, or to rebuild a phone. It <strong>replaces</strong> everything currently stored here, so it asks before writing.</p>
+        <label class="file-picker secondary" for="restore-input">Choose backup file</label>
+        <input type="file" id="restore-input" accept=".json" class="visually-hidden">
+        <p id="restore-status" class="hint"></p>
+        <div id="restore-summary"></div>
+        <button id="restore-confirm" class="primary hidden">Replace everything with this backup</button>
+      </section>
+
       <section id="annotations-section">
         <h2>Apply annotations</h2>
         <p class="hint">Adds tags and notes from a prepared JSON file — signers, endorsements, corrected pins. Merges into what's already recorded; never overwrites your notes.</p>

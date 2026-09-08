@@ -1,4 +1,7 @@
-import { importCsvFile, ImportError, getWalkerName, setWalkerName } from './import.js';
+import {
+  importCsvFile, ImportError, getWalkerName, setWalkerName,
+  readBackupFile, restoreBackup,
+} from './import.js';
 import { openDB, getAll } from './db.js';
 import {
   initMap, addHouseholdLayers, loadHouseholdFeatures,
@@ -332,6 +335,69 @@ walkerSaveBtn.addEventListener('click', async () => {
   }
   await setWalkerName(name);
   walkerStatus.textContent = `Saved: ${name}`;
+});
+
+// ---- Restore from backup ----
+
+const restoreInput = document.getElementById('restore-input');
+const restoreStatus = document.getElementById('restore-status');
+const restoreSummary = document.getElementById('restore-summary');
+const restoreConfirm = document.getElementById('restore-confirm');
+let pendingBackup = null;
+
+restoreInput.addEventListener('change', async () => {
+  const file = restoreInput.files[0];
+  if (!file) return;
+  restoreStatus.textContent = `Reading ${file.name}…`;
+  restoreSummary.textContent = '';
+  restoreConfirm.classList.add('hidden');
+  pendingBackup = null;
+  try {
+    const { backup, summary } = await readBackupFile(file);
+    pendingBackup = backup;
+    const when = summary.exportedAt ? new Date(summary.exportedAt).toLocaleString() : 'unknown date';
+    restoreStatus.textContent =
+      `${file.name} — exported ${when}${summary.walker ? ` by ${summary.walker}` : ''}.`;
+    restoreSummary.innerHTML = `
+      <ul>
+        <li>${summary.households} household(s), ${summary.voters} voter(s)</li>
+        <li>${summary.contacted} household(s) contacted</li>
+        <li>${summary.rated} voter(s) with a support level</li>
+        <li>${summary.notes} note(s), ${summary.signs} yard sign(s)</li>
+      </ul>
+      <p class="hint"><strong>This replaces everything currently stored in this browser.</strong>
+      Export a backup first if there is anything here you have not saved.</p>`;
+    restoreConfirm.classList.remove('hidden');
+  } catch (err) {
+    restoreStatus.textContent = err instanceof ImportError
+      ? err.message : 'Could not read that file. See console for details.';
+    if (!(err instanceof ImportError)) console.error('Backup read failed', err);
+    restoreSummary.textContent = '';
+  } finally {
+    restoreInput.value = '';
+  }
+});
+
+restoreConfirm.addEventListener('click', async () => {
+  if (!pendingBackup) return;
+  restoreConfirm.disabled = true;
+  restoreStatus.textContent = 'Restoring…';
+  try {
+    const r = await restoreBackup(pendingBackup);
+    pendingBackup = null;
+    restoreConfirm.classList.add('hidden');
+    restoreSummary.textContent = '';
+    restoreStatus.textContent =
+      `Restored ${r.households} household(s) and ${r.voters} voter(s). Opening the map…`;
+    hasFramedData = false;
+    await refreshPins();
+    showMap();
+  } catch (err) {
+    restoreStatus.textContent = 'Restore failed. See console for details.';
+    console.error('Restore failed', err);
+  } finally {
+    restoreConfirm.disabled = false;
+  }
 });
 
 // ---- Apply annotations ----
