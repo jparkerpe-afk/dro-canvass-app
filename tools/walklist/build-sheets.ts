@@ -270,8 +270,14 @@ tr.companion td { color:var(--grey); font-size:9.5pt; font-style:italic; }
 .box { display:inline-block; width:10px; height:10px; border:1.2px solid var(--ink);
        margin:0 3px 0 9px; vertical-align:-1px; }
 .box.first { margin-left:0; }
-.note { margin-top:5px; border-bottom:1px dotted var(--grey); height:15px; }
-.note::before { content:"notes"; font-size:8pt; color:var(--grey); margin-right:6px; }
+/* A pen needs roughly 7mm of clear height, and the line has to read as
+   somewhere to write rather than as a divider -- the first cut used a 15px
+   dotted rule and it vanished into the layout. */
+.note { margin-top:6px; height:26px; border-bottom:1px solid var(--ink);
+        display:flex; align-items:flex-end; }
+.note::before { content:"notes"; font-size:8pt; color:var(--grey);
+                letter-spacing:.06em; text-transform:uppercase;
+                padding-bottom:2px; }
 .street-head { font-size:10pt; font-weight:700; letter-spacing:.06em;
                text-transform:uppercase; color:var(--brand);
                margin:12px 0 2px; padding-top:4px; border-top:1px solid var(--brand); }
