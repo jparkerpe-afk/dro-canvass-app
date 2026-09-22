@@ -23,3 +23,6 @@ Thumbs.db
 
 # Local review report — contains addresses and voter counts.
 review-report.html
+
+# Printed walk lists — names, ages, party and addresses, one page per turf.
+/walklists/
