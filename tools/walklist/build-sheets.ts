@@ -243,47 +243,52 @@ const noteLine = (s: string) =>
   s.split("\n").map((l) => l.trim()).filter(Boolean).join(" · ");
 
 const CSS = `
-:root { --ink:#1a1a1a; --rule:#c8c8c8; --grey:#8a8a8a; --brand:#203864; }
+/* Sized for the people actually carrying it: the volunteers skew older, and
+   this gets read standing up, at arm's length, on a clipboard, often in full
+   sun. Body text is 13.5pt rather than the 11pt a desk document would use,
+   and the secondary grey is darkened to hold its contrast on paper -- a light
+   grey that looks refined on screen turns into nothing at all in print. */
+:root { --ink:#1a1a1a; --rule:#c0c0c0; --grey:#5f5f5f; --brand:#203864; }
 * { box-sizing:border-box; }
-body { font:11pt/1.35 "Helvetica Neue",Arial,sans-serif; color:var(--ink);
-       margin:0; padding:14mm 12mm; background:#fff; }
-h1 { font-size:15pt; margin:0; color:var(--brand); letter-spacing:.02em; }
-.sub { font-size:9.5pt; color:var(--grey); margin:2px 0 0; }
-header { border-bottom:2px solid var(--brand); padding-bottom:6px; margin-bottom:8px; }
-.fill { display:flex; gap:18px; margin:8px 0 4px; font-size:10pt; }
-.fill span { flex:1; border-bottom:1px solid var(--ink); padding-bottom:1px; }
+body { font:13.5pt/1.45 "Helvetica Neue",Arial,sans-serif; color:var(--ink);
+       margin:0; padding:12mm 10mm; background:#fff; }
+h1 { font-size:18pt; margin:0; color:var(--brand); letter-spacing:.02em; }
+.sub { font-size:11.5pt; color:var(--grey); margin:3px 0 0; }
+header { border-bottom:2px solid var(--brand); padding-bottom:6px; margin-bottom:9px; }
+.fill { display:flex; gap:18px; margin:10px 0 6px; font-size:12.5pt; }
+.fill span { flex:1; border-bottom:1px solid var(--ink); padding-bottom:3px; }
 .fill b { font-weight:600; }
-.legend { font-size:8.5pt; color:var(--grey); margin:0 0 10px;
-          border:1px solid var(--rule); padding:5px 7px; border-radius:3px; }
-.hh { border-bottom:1px solid var(--rule); padding:7px 0 6px;
+.legend { font-size:11pt; color:var(--grey); margin:0 0 12px; line-height:1.4;
+          border:1px solid var(--rule); padding:7px 9px; border-radius:3px; }
+.hh { border-bottom:1px solid var(--rule); padding:9px 0 8px;
       break-inside:avoid; page-break-inside:avoid; }
 .hh-top { display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
-.addr { font-weight:700; font-size:11.5pt; }
-.warn { font-size:9pt; color:#8a3a12; font-style:italic; margin:2px 0 0; }
-.who { width:100%; border-collapse:collapse; margin-top:4px; }
-.who td { padding:2px 0; vertical-align:baseline; }
-.who .nm { width:46%; }
-.who .ag { width:8%; color:var(--grey); }
-.who .pt { width:16%; color:var(--grey); }
-.who .bx { width:30%; text-align:right; white-space:nowrap; }
-tr.companion td { color:var(--grey); font-size:9.5pt; font-style:italic; }
-.box { display:inline-block; width:10px; height:10px; border:1.2px solid var(--ink);
-       margin:0 3px 0 9px; vertical-align:-1px; }
+.addr { font-weight:700; font-size:15pt; }
+.warn { font-size:11.5pt; color:#8a3a12; font-style:italic; margin:3px 0 0; }
+.who { width:100%; border-collapse:collapse; margin-top:6px; }
+.who td { padding:3px 0; vertical-align:baseline; }
+.who .nm { width:40%; }
+.who .ag { width:7%; color:var(--grey); }
+.who .pt { width:14%; color:var(--grey); }
+.who .bx { width:39%; text-align:right; white-space:nowrap; }
+tr.companion td { color:var(--grey); font-size:12pt; font-style:italic; }
+.box { display:inline-block; width:14px; height:14px; border:1.5px solid var(--ink);
+       margin:0 5px 0 13px; vertical-align:-2px; }
 .box.first { margin-left:0; }
 /* A pen needs roughly 7mm of clear height, and the line has to read as
    somewhere to write rather than as a divider -- the first cut used a 15px
    dotted rule and it vanished into the layout. */
-.note { margin-top:6px; height:26px; border-bottom:1px solid var(--ink);
+.note { margin-top:7px; height:30px; border-bottom:1px solid var(--ink);
         display:flex; align-items:flex-end; }
-.note::before { content:"notes"; font-size:8pt; color:var(--grey);
+.note::before { content:"notes"; font-size:9.5pt; color:var(--grey);
                 letter-spacing:.06em; text-transform:uppercase;
-                padding-bottom:2px; }
-.street-head { font-size:10pt; font-weight:700; letter-spacing:.06em;
+                padding-bottom:3px; }
+.street-head { font-size:13pt; font-weight:700; letter-spacing:.06em;
                text-transform:uppercase; color:var(--brand);
-               margin:12px 0 2px; padding-top:4px; border-top:1px solid var(--brand); }
-footer { margin-top:12px; font-size:8.5pt; color:var(--grey);
+               margin:14px 0 3px; padding-top:5px; border-top:1px solid var(--brand); }
+footer { margin-top:14px; font-size:10pt; color:var(--grey);
          display:flex; justify-content:space-between; }
-@page { size:letter; margin:12mm; }
+@page { size:letter; margin:10mm; }
 @media print { body { padding:0; } .noprint { display:none; } }
 `;
 
