@@ -328,6 +328,10 @@ tr.companion td { color:var(--grey); font-size:12pt; font-style:italic; }
                margin:14px 0 3px; padding-top:5px; border-top:1px solid var(--brand); }
 footer { margin-top:14px; font-size:10pt; color:var(--grey);
          display:flex; justify-content:space-between; }
+/* Each turf starts a new sheet, so the combined file can be printed in one
+   job and then split into packets along the page breaks. */
+.turf { break-before:page; page-break-before:always; }
+.turf:first-of-type { break-before:auto; page-break-before:auto; }
 @page { size:letter; margin:10mm; }
 @media print { body { padding:0; } .noprint { display:none; } }
 `;
@@ -375,10 +379,7 @@ function renderTurf(turf: Turf, n: number, total: number): string {
     <div class="note"></div>
   </div>`).join("")}`).join("");
 
-  return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8">
-<title>Turf ${n} — ${ordered[0][0]}</title>
-<style>${CSS}</style></head><body>
+  return `<section class="turf">
 <header>
   <h1>CHERYL PARKER · DEL REY OAKS</h1>
   <p class="sub">Turf ${n} of ${total} &middot; ${turf.houses.length} households &middot; ${targetCount} people to ask</p>
@@ -394,8 +395,21 @@ function renderTurf(turf: Turf, n: number, total: number): string {
 </p>
 ${body}
 <footer><span>Turf ${n} of ${total}</span><span>Return this sheet to Jed &mdash; it is the only copy.</span></footer>
-</body></html>`;
+</section>`;
 }
+
+const page = (title: string, inner: string) => `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<title>${esc(title)}</title>
+<style>${CSS}</style></head><body>
+${inner}
+</body></html>`;
+
+// Every turf in one file, each starting a fresh sheet of paper. Ten separate
+// print jobs is friction for no reason -- print once, then split the stack by
+// the turf number that is already in every footer.
+const combined = (parts: string[]) =>
+  page(`All turfs — walk list`, parts.join("\n"));
 
 // ---- write ------------------------------------------------------------------
 
@@ -406,10 +420,13 @@ for (const f of Deno.readDirSync(OUT)) {
 
 const stamp = new Date().toISOString().slice(0, 10);
 const rows: string[] = [];
+const allParts: string[] = [];
 turfs.forEach((turf, i) => {
   const n = i + 1;
   const file = `turf-${String(n).padStart(2, "0")}.html`;
-  Deno.writeTextFileSync(`${OUT}/${file}`, renderTurf(turf, n, turfs.length));
+  const inner = renderTurf(turf, n, turfs.length);
+  allParts.push(inner);
+  Deno.writeTextFileSync(`${OUT}/${file}`, page(`Turf ${n}`, inner));
 
   const streets = [...new Set(turf.blocks.map((b) => b.street))].sort();
   let span = 0;
@@ -420,6 +437,8 @@ turfs.forEach((turf, i) => {
   console.log(`turf ${String(n).padStart(2)}  ${String(turf.houses.length).padStart(3)} hh  ` +
     `${String(targets).padStart(3)} targets  ${String(Math.round(span)).padStart(4)}m  ${streets.join(", ")}`);
 });
+
+Deno.writeTextFileSync(`${OUT}/all-turfs.html`, combined(allParts));
 
 Deno.writeTextFileSync(`${OUT}/index.html`, `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>Walk list ${stamp}</title>
@@ -432,7 +451,9 @@ a{color:var(--brand)}</style></head><body>
 <p class="sub">Built ${stamp} from ${esc(BACKUP.split("/").pop() || "")} &middot;
 ${houses.length} households &middot; ${houses.reduce((s, h) => s + h.targets.length, 0)} people to ask &middot;
 ${turfs.length} turfs</p></header>
-<p class="legend">One packet per volunteer. Set <b>Walker name</b> in the app to that volunteer's
+<p class="legend"><b><a href="all-turfs.html">Print all turfs in one job</a></b> &mdash; each turf starts a
+new sheet, and every page carries its turf number, so the stack splits straight into packets.
+One packet per volunteer. Set <b>Walker name</b> in the app to that volunteer's
 name before typing their sheets in, so <code>contacted_by</code> records who actually knocked.</p>
 <table><tr><th>Turf</th><th>Households</th><th>People</th><th>Span</th><th>Streets</th></tr>
 ${rows.join("\n")}</table>
