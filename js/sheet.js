@@ -1,5 +1,6 @@
 import { openDB, get, getByIndex, update, getMeta } from './db.js';
 import { tagLabel } from './annotations.js';
+import { isSchematicPin } from './map.js';
 
 export const CONTACT_STATUSES = [
   { value: 'talked', label: 'Talked' },
@@ -263,10 +264,18 @@ export async function openSheet(householdId, onChange) {
 
   addressEl.textContent = household.address;
 
+  // A condo pin that has been spread out to make it tappable is not where the
+  // unit is, and the walker has to be told that in the one place they are
+  // looking. It outranks the generic geocode warning because it is a stronger
+  // statement: not "this may be off" but "we placed this".
+  const spreadPin = isSchematicPin(householdId);
   const lowConfidence = isLowConfidenceGeocode(
     household.accuracy_type || (voters[0] && voters[0].accuracy_type)
   );
-  geoWarningEl.classList.toggle('hidden', !lowConfidence);
+  geoWarningEl.textContent = spreadPin
+    ? 'Dot placed by unit number, not surveyed — the building is right, the door is a guess'
+    : 'Approximate location — the pin may be off';
+  geoWarningEl.classList.toggle('hidden', !spreadPin && !lowConfidence);
 
   // For ~34 households the roll names a street the county has no record of,
   // while the pin sits on a house the county numbers identically on a

@@ -188,8 +188,11 @@ async function refreshPins() {
     address: f.properties.address,
     contact_status: f.properties.contact_status,
     voterCount: f.properties.voterCount,
-    lon: f.geometry.coordinates[0],
-    lat: f.geometry.coordinates[1],
+    // The true geocode, not the drawn position. A stacked condo pin is moved
+    // to make it tappable, and "you are 12m from this door" has to be measured
+    // from where the house actually is or it is worse than saying nothing.
+    lon: f.properties.trueLon,
+    lat: f.properties.trueLat,
   }));
   map.getSource('households').setData(data);
 

@@ -241,6 +241,93 @@ export function setHighlightedHousehold(map, household) {
   });
 }
 
+// ---- Spreading out stacked pins ----
+//
+// The two condo complexes geocode to almost the same point: 101 of 114 units
+// have another unit within 5m, and some share a coordinate exactly. On the map
+// that is one dot, and a walker standing at a door cannot tap their way to the
+// right person — which is the whole job at a condo, where the pin can never
+// tell you which door is which anyway.
+//
+// So for crowded pins only, the map lays them out in a grid instead of drawing
+// them where they geocode. This is a DISPLAY position and deliberately not the
+// truth: it is never written back, never exported, and the stored lat/lon is
+// carried alongside so proximity still measures from the real one.
+//
+// Grouping is purely spatial: pins that touch each other get laid out together.
+// It is tempting to use the numbering — 631 is building 6 — but that heuristic
+// is wrong the moment it meets an ordinary street, where it would gather every
+// crowded 8xx Rosita Rd into a fictional "building 8" and shuffle houses whose
+// pins were fine. Distance needs no such assumption, and here it produces the
+// buildings anyway: units inside one building sit within a couple of metres of
+// each other while the buildings themselves are 30m apart or more.
+//
+// A unit whose pin is nowhere near its building is left exactly where it is.
+// It is not stacked on anything, so it is still tappable, and moving it would
+// be inventing a fact rather than untangling one.
+
+const CROWD_M = 6;      // closer than this to a neighbour and a pin is unclickable
+const SPREAD_M = 10;    // gap between laid-out pins; a building lands ~40m across
+
+const schematic = new Set();
+export function isSchematicPin(householdId) {
+  return schematic.has(householdId);
+}
+
+const median = (nums) => {
+  const s = [...nums].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+function spreadCrowdedPins(households) {
+  schematic.clear();
+  const display = new Map();
+  const mPerLat = 111320;
+  const apart = (a, b) => {
+    const mPerLon = 111320 * Math.cos(a.lat * Math.PI / 180);
+    return Math.hypot((b.lon - a.lon) * mPerLon, (b.lat - a.lat) * mPerLat);
+  };
+
+  // Union-find over "within CROWD_M of each other", so a row of pins each close
+  // to the next becomes one group rather than several overlapping ones.
+  const placed = households.filter((h) => Number.isFinite(h.lat) && Number.isFinite(h.lon));
+  const parent = placed.map((_, i) => i);
+  const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  for (let i = 0; i < placed.length; i++) {
+    for (let j = i + 1; j < placed.length; j++) {
+      if (apart(placed[i], placed[j]) < CROWD_M) parent[find(i)] = find(j);
+    }
+  }
+  const groups = new Map();
+  for (let i = 0; i < placed.length; i++) {
+    const r = find(i);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(placed[i]);
+  }
+
+  for (const members of groups.values()) {
+    if (members.length < 2) continue; // alone, and already tappable
+    // House-number order, so walking the numbers walks the dots left to right.
+    members.sort((a, b) => (parseInt(a.address, 10) || 0) - (parseInt(b.address, 10) || 0));
+    const lat0 = median(members.map((h) => h.lat));
+    const lon0 = median(members.map((h) => h.lon));
+    const mPerLon = 111320 * Math.cos(lat0 * Math.PI / 180);
+    const cols = Math.ceil(Math.sqrt(members.length));
+    const rows = Math.ceil(members.length / cols);
+    members.forEach((h, i) => {
+      const cx = (i % cols) - (cols - 1) / 2;
+      const cy = Math.floor(i / cols) - (rows - 1) / 2;
+      display.set(h.id, {
+        lat: lat0 - (cy * SPREAD_M) / mPerLat,
+        lon: lon0 + (cx * SPREAD_M) / mPerLon,
+      });
+      schematic.add(h.id);
+    });
+  }
+  return display;
+}
+
 export async function loadHouseholdFeatures(db) {
   const [households, voters] = await Promise.all([
     getAll(db, 'households'),
@@ -253,20 +340,30 @@ export async function loadHouseholdFeatures(db) {
     activeVoterCount.set(voter.householdId, (activeVoterCount.get(voter.householdId) || 0) + 1);
   }
 
+  const placed = households.filter((h) => Number.isFinite(h.lat) && Number.isFinite(h.lon));
+  const display = spreadCrowdedPins(placed);
+
   return {
     type: 'FeatureCollection',
-    features: households
-      .filter((h) => Number.isFinite(h.lat) && Number.isFinite(h.lon))
-      .map((h) => ({
+    features: placed.map((h) => {
+      const at = display.get(h.id);
+      return {
         type: 'Feature',
-        geometry: { type: 'Point', coordinates: [h.lon, h.lat] },
+        geometry: { type: 'Point', coordinates: at ? [at.lon, at.lat] : [h.lon, h.lat] },
         properties: {
           id: h.id,
           address: h.address,
           contact_status: h.contact_status,
           sign: !!h.sign,
           voterCount: activeVoterCount.get(h.id) || 0,
+          // The real geocode, always. The dot may have been moved to make it
+          // tappable, but "how far am I from this house" must never be answered
+          // from a position we invented.
+          trueLat: h.lat,
+          trueLon: h.lon,
+          schematic: !!at,
         },
-      })),
+      };
+    }),
   };
 }
