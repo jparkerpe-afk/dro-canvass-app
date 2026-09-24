@@ -328,6 +328,22 @@ tr.companion td { color:var(--grey); font-size:12pt; font-style:italic; }
                margin:14px 0 3px; padding-top:5px; border-top:1px solid var(--brand); }
 footer { margin-top:14px; font-size:10pt; color:var(--grey);
          display:flex; justify-content:space-between; }
+/* The turf map. Greys are chosen to survive a cheap office printer: the
+   neighbouring roads have to read as context without competing with this
+   turf's own streets or with the house dots. */
+.map { width:100%; height:auto; display:block; margin:8px 0 2px;
+       border:1px solid var(--rule); break-inside:avoid; page-break-inside:avoid; }
+.map .rd { fill:none; stroke:#c4c4c4; stroke-width:2.4; stroke-linecap:round;
+           stroke-linejoin:round; }
+.map .rd.on { stroke:#6d6d6d; stroke-width:4.4; }
+.map .ho { fill:var(--brand); stroke:#fff; stroke-width:1.1; }
+.map .lb { font-size:11px; fill:#8a8a8a; text-anchor:middle;
+           paint-order:stroke; stroke:#fff; stroke-width:3.2; stroke-linejoin:round; }
+.map .lb.on { font-size:13px; font-weight:700; fill:#1a1a1a; }
+.map .bar { stroke:#1a1a1a; stroke-width:1.4; fill:none; }
+.map .sc { font-size:10px; fill:#1a1a1a; text-anchor:middle; }
+.map-cap { font-size:9.5pt; color:var(--grey); margin:0 0 10px; }
+
 /* Each turf starts a new sheet, so the combined file can be printed in one
    job and then split into packets along the page breaks. */
 .turf { break-before:page; page-break-before:always; }
@@ -339,6 +355,182 @@ footer { margin-top:14px; font-size:10pt; color:var(--grey);
 const boxes = (labels: string[]) =>
   labels.map((l, i) =>
     `<span class="box${i === 0 ? " first" : ""}"></span>${esc(l)}`).join("");
+
+// ---- the turf map -----------------------------------------------------------
+//
+// Drawn as inline SVG from cached OSM centrelines rather than a tile image: it
+// prints black-on-white at any size, needs no network on the morning of a walk,
+// and nothing about it can fail silently in a print dialog the way a background
+// image does.
+
+type Road = { name: string; kind: string; pts: [number, number][] };
+const ROADS: Road[] = (() => {
+  try {
+    return JSON.parse(
+      Deno.readTextFileSync(new URL("./roads-dro.json", import.meta.url)),
+    ).ways;
+  } catch {
+    console.error("! roads-dro.json missing -- run fetch-roads.ts; maps omitted");
+    return [];
+  }
+})();
+
+// Street names come from two different worlds: the roll abbreviates ("ROSITA
+// RD"), OSM spells out ("Rosita Road"). Normalise the suffix to one spelling --
+// but KEEP it. Dropping it entirely looks tidier and is wrong here: Del Rey
+// Oaks has both a Carlton Drive and a Carlton Place, and a Portola Drive and a
+// Portola Avenue, and collapsing them drew a neighbouring street as if it were
+// one of this turf's own.
+const SUFFIX: Record<string, string> = {
+  ROAD: "RD", RD: "RD", DRIVE: "DR", DR: "DR", AVENUE: "AVE", AVE: "AVE",
+  PLACE: "PL", PL: "PL", COURT: "CT", CT: "CT", CIRCLE: "CIR", CIR: "CIR",
+  STREET: "ST", ST: "ST", LANE: "LN", LN: "LN", HIGHWAY: "HWY", HWY: "HWY",
+  BOULEVARD: "BLVD", BLVD: "BLVD", WAY: "WAY", RUN: "RUN", PATH: "PATH",
+};
+function roadKey(s: string): string {
+  const parts = s.toUpperCase().replace(/\./g, "").replace(/\s+/g, " ").trim().split(" ");
+  const last = parts[parts.length - 1];
+  if (parts.length > 1 && SUFFIX[last]) parts[parts.length - 1] = SUFFIX[last];
+  return parts.join(" ");
+}
+
+// On the map the suffix is dead weight: a stub drawn as a stub is obviously a
+// Place, and five adjacent cul-de-sacs printed as "Baxter Place Hillwil Place
+// Voe Place" ran into each other. Streets keep theirs, since Carlton Drive and
+// Carlton Place are both here and both matter.
+const shortName = (s: string) => s.replace(/\s+(Place|Court|Circle)$/, "");
+
+const MAP_W = 640;          // svg user units; CSS scales it to the page width
+const MAP_H = 250;
+const MAP_PAD_M = 70;       // breathing room beyond the furthest house
+const MAP_MIN_M = 260;      // stops a tight cul-de-sac turf zooming absurdly
+
+function turfMap(turf: Turf): string {
+  if (!ROADS.length) return "";
+  const lats = turf.houses.map((h) => h.lat), lons = turf.houses.map((h) => h.lon);
+  const midLat = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const midLon = (Math.min(...lons) + Math.max(...lons)) / 2;
+  const mPerLat = 111320, mPerLon = 111320 * Math.cos(midLat * Math.PI / 180);
+  // Work in metres from the turf centre, then fit that box to the svg.
+  const X = (lon: number) => (lon - midLon) * mPerLon;
+  const Y = (lat: number) => -(lat - midLat) * mPerLat;
+
+  let halfW = Math.max(...lons.map((l) => Math.abs(X(l)))) + MAP_PAD_M;
+  let halfH = Math.max(...lats.map((l) => Math.abs(Y(l)))) + MAP_PAD_M;
+  halfW = Math.max(halfW, MAP_MIN_M / 2);
+  halfH = Math.max(halfH, (MAP_MIN_M / 2) * (MAP_H / MAP_W));
+  // Match the svg aspect so nothing is squashed.
+  if (halfW / halfH < MAP_W / MAP_H) halfW = halfH * (MAP_W / MAP_H);
+  else halfH = halfW * (MAP_H / MAP_W);
+
+  const sx = (lon: number) => MAP_W / 2 + (X(lon) / halfW) * (MAP_W / 2);
+  const sy = (lat: number) => MAP_H / 2 + (Y(lat) / halfH) * (MAP_H / 2);
+  const inView = (lat: number, lon: number) =>
+    Math.abs(X(lon)) <= halfW && Math.abs(Y(lat)) <= halfH;
+
+  const mine = new Set(turf.houses.map((h) => roadKey(h.street)));
+  const paths: string[] = [];
+  const labels: { x: number; y: number; t: string; on: boolean }[] = [];
+  const seen = new Set<string>();
+
+  for (const w of ROADS) {
+    if (!w.pts.some(([la, lo]) => inView(la, lo))) continue;
+    const on = !!w.name && mine.has(roadKey(w.name));
+    const d = w.pts.map(([la, lo], i) =>
+      `${i ? "L" : "M"}${sx(lo).toFixed(1)} ${sy(la).toFixed(1)}`).join("");
+    paths.push(`<path d="${d}" class="${on ? "rd on" : "rd"}"/>`);
+
+    if (w.name && !seen.has(w.name)) {
+      const vis = w.pts.filter(([la, lo]) => inView(la, lo));
+      if (vis.length) {
+        // A label near the edge prints half-cut ("General Jim Mo"), which reads
+        // as a mistake rather than as a map that ends. Walk along the street
+        // looking for a spot with room, starting from the middle -- one
+        // position only was enough to lose "Portola Drive" off a turf whose
+        // main street it is.
+        const room = 14 + shortName(w.name).length * 3.1;
+        const order = [...vis.keys()].sort((a, b) =>
+          Math.abs(a - vis.length / 2) - Math.abs(b - vis.length / 2));
+        for (const i of order) {
+          const x = sx(vis[i][1]), y = sy(vis[i][0]);
+          if (x > room && x < MAP_W - room && y > 14 && y < MAP_H - 22) {
+            labels.push({ x, y, t: shortName(w.name), on });
+            // Claim the name only once a position actually worked. OSM splits
+            // one street into many ways, and claiming on the first one seen
+            // let a way that merely clips the corner of the view silently
+            // block every other piece of the same street from being named.
+            seen.add(w.name);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // De-clutter. A neighbour's label that lands on something already placed is
+  // simply dropped -- overlapping type prints worse than a missing name. But
+  // this turf's own streets are the point of the map, and short cul-de-sacs
+  // sit close enough together that three of them collided and vanished, so
+  // those get nudged up and down until they find room and are placed either
+  // way as a last resort.
+  const placed: typeof labels = [];
+  // Half-width of a centred label, in svg units. Bold "on" labels are set
+  // larger, so they need more room than a neighbour's name. Both labels count:
+  // measuring only the incoming one let adjacent cul-de-sacs print as
+  // "Hillwil Place Voe Place" with the names touching.
+  // ~7.2 svg units per character bold, ~5.8 regular, halved for a centred
+  // label. Do not fold the /2 into the constants and then divide again, which
+  // is how these came out at half width and printed touching.
+  const labHalf = (l: { t: string; on: boolean }) => l.t.length * (l.on ? 7.2 : 5.8) / 2;
+  // The vertical threshold has to exceed the line height, or two labels count
+  // as clear while visibly sitting on top of each other.
+  const LINE = 16;
+  const clashes = (x: number, y: number, l: { t: string; on: boolean }) =>
+    placed.some((p) =>
+      Math.abs(p.x - x) < labHalf(p) + labHalf(l) + 5 && Math.abs(p.y - y) < LINE);
+
+  for (const l of labels.sort((a, b) => Number(b.on) - Number(a.on))) {
+    if (!clashes(l.x, l.y, l)) { placed.push(l); continue; }
+    if (!l.on) continue;
+    let put = false;
+    for (const dy of [-LINE, LINE, -LINE * 2, LINE * 2, -LINE * 3, LINE * 3]) {
+      const y = l.y + dy;
+      if (y > 14 && y < MAP_H - 22 && !clashes(l.x, y, l)) {
+        placed.push({ ...l, y });
+        put = true;
+        break;
+      }
+    }
+    if (!put) placed.push(l);
+  }
+
+  const dots = turf.houses.map((h) =>
+    `<circle cx="${sx(h.lon).toFixed(1)}" cy="${sy(h.lat).toFixed(1)}" r="3.4" class="ho"/>`).join("");
+
+  // Scale bar: a round number of metres that fits comfortably across.
+  const want = (halfW * 2) / 4;
+  const nice = [50, 100, 150, 200, 250, 500].reduce((a, b) =>
+    Math.abs(b - want) < Math.abs(a - want) ? b : a);
+  const barPx = (nice / (halfW * 2)) * MAP_W;
+
+  return `<svg class="map" viewBox="0 0 ${MAP_W} ${MAP_H}" role="img" aria-label="Map of this turf">
+  <rect width="${MAP_W}" height="${MAP_H}" fill="#fff"/>
+  ${paths.join("")}
+  ${dots}
+  ${placed.map((l) =>
+    `<text x="${l.x.toFixed(1)}" y="${l.y.toFixed(1)}" class="lb${l.on ? " on" : ""}">${esc(l.t)}</text>`).join("")}
+  <g transform="translate(14 ${MAP_H - 14})">
+    <line x1="0" y1="0" x2="${barPx.toFixed(1)}" y2="0" class="bar"/>
+    <line x1="0" y1="-4" x2="0" y2="4" class="bar"/>
+    <line x1="${barPx.toFixed(1)}" y1="-4" x2="${barPx.toFixed(1)}" y2="4" class="bar"/>
+    <text x="${(barPx / 2).toFixed(1)}" y="-7" class="sc">${nice} m</text>
+  </g>
+  <g transform="translate(${MAP_W - 20} 22)">
+    <path d="M0 8 L0 -8 M0 -8 L-3.5 -3 M0 -8 L3.5 -3" class="bar"/>
+    <text x="0" y="20" class="sc">N</text>
+  </g>
+</svg>`;
+}
 
 function renderTurf(turf: Turf, n: number, total: number): string {
   // Streets in the order a walker meets them: biggest block first, then the
@@ -393,6 +585,8 @@ function renderTurf(turf: Turf, n: number, total: number): string {
   Names in grey are registered at the address but are not on our list; if one answers the door, talk to them anyway and write it in the notes.
   <b>Yard signs, moved-away, wrong address:</b> write it on the notes line.
 </p>
+${turfMap(turf)}
+<p class="map-cap">Every dot is a door on this sheet. Streets in bold are yours; the paler ones are just there to get your bearings.</p>
 ${body}
 <footer><span>Turf ${n} of ${total}</span><span>Return this sheet to Jed &mdash; it is the only copy.</span></footer>
 </section>`;
