@@ -14,9 +14,24 @@
 //   deno run --allow-read --allow-write tools/walklist/build-sheets.ts \
 //     [backup.json] [--out DIR] [--size N]
 
-const DEFAULT_BACKUP =
-  "C:/DRO/CanvassApp/dlsfromphone/dro_canvass_jed_2026-09-19_backup.json";
+const BACKUP_DIR = "C:/DRO/CanvassApp/dlsfromphone";
 const DEFAULT_OUT = "C:/DRO/CanvassApp/walklists";
+
+// Always the newest backup in the folder, never a date written into the source.
+// A hardcoded filename is how a sheet ends up sending someone to a door that
+// was knocked last weekend: the file keeps working, so nothing announces that
+// it has gone stale. The build prints which file it used, every time.
+function newestBackup(): string {
+  const files = [...Deno.readDirSync(BACKUP_DIR)]
+    .filter((f) => f.isFile && /^dro_canvass_.*_backup\.json$/.test(f.name))
+    .map((f) => f.name)
+    .sort();
+  if (!files.length) {
+    console.error(`no backup files in ${BACKUP_DIR}`);
+    Deno.exit(2);
+  }
+  return `${BACKUP_DIR}/${files[files.length - 1]}`;
+}
 
 // ---- the filter -------------------------------------------------------------
 //
@@ -64,13 +79,21 @@ const REMOVED = new Set([
 // Jed's own timestamps give 25 doors/hour over 406 timed doors. A first-time
 // volunteer reading a sheet, at the observed 33% answer rate, runs closer to
 // 15. 28 households is therefore about two hours including walking.
+//
+// This is the size a turf aims for, not a hard cap: the build divides the real
+// total by the number of turfs that implies, so they come out even rather than
+// leaving a stub at the end. Override with --size.
 const TURF_TARGET = 28;
-const TURF_MAX = 34;
 
 // A block is a contiguous house-number run on one street. Capping it keeps a
 // single long street from swallowing a whole turf, and splitting on a spatial
 // jump stops a street that bends away from itself being treated as one run.
-const BLOCK_MAX = 14;
+//
+// The cap is also what lets turfs come out even: a block is indivisible once
+// built, so a coarse one cannot be used to fill a small gap. At 14 the rebuild
+// swung between 23 and 33 households; at 8 it holds inside 26 to 31 for about
+// 20m of extra walking.
+const BLOCK_MAX = 8;
 const BLOCK_JUMP_M = 180;
 
 const args = Deno.args.filter((a) => !a.startsWith("--"));
@@ -78,9 +101,10 @@ const flag = (name: string) => {
   const i = Deno.args.indexOf(name);
   return i >= 0 ? Deno.args[i + 1] : null;
 };
-const BACKUP = args[0] || DEFAULT_BACKUP;
+const BACKUP = args[0] || newestBackup();
 const OUT = flag("--out") || DEFAULT_OUT;
 const SIZE = Number(flag("--size")) || TURF_TARGET;
+console.log(`reading ${BACKUP.split("/").pop()}`);
 
 const backup = JSON.parse(Deno.readTextFileSync(BACKUP));
 if (backup.format !== "dro-canvass-backup") {
@@ -189,11 +213,23 @@ for (const [street, arr] of byStreet) {
 // left, then accrete the nearest block until the turf is full. Seeding at the
 // edge rather than the middle stops the last turf being a ring of leftovers
 // scattered around the town.
+//
+// Each turf takes a share of what is still unassigned, recomputed as the build
+// goes: ceil(houses left / turfs left). A fixed fill line does not work, because
+// a turf that overshoots its share steals from the turfs after it and the last
+// one starves -- the first rebuild after a walk produced turfs of 33 and 14,
+// and a volunteer handed the stub is finished in forty minutes while another is
+// still out. Recomputing after every turf makes the error self-correcting: take
+// one house too many here and the quota for everyone after drops to absorb it.
+const turfCount = Math.max(1, Math.round(houses.length / SIZE));
+
 type Turf = { blocks: Block[]; houses: House[] };
 const unassigned = new Set(blocks.keys());
 const turfs: Turf[] = [];
 while (unassigned.size) {
   const rest = [...unassigned].map((i) => blocks[i]);
+  const left = rest.reduce((s, b) => s + b.houses.length, 0);
+  const quota = Math.ceil(left / Math.max(1, turfCount - turfs.length));
   const mid = {
     lat: rest.reduce((s, b) => s + b.lat, 0) / rest.length,
     lon: rest.reduce((s, b) => s + b.lon, 0) / rest.length,
@@ -205,10 +241,14 @@ while (unassigned.size) {
   }
   const turf: Turf = { blocks: [blocks[seed]], houses: [...blocks[seed].houses] };
   unassigned.delete(seed);
-  while (turf.houses.length < SIZE && unassigned.size) {
+  while (turf.houses.length < quota && unassigned.size) {
+    // Prefer the nearest block, but never one that overshoots the quota by more
+    // than it undershoots -- taking a whole block to land 4 over is worse than
+    // stopping 2 under, and the next turf inherits the difference either way.
     let pick = -1, best = Infinity;
     for (const i of unassigned) {
-      if (turf.houses.length + blocks[i].houses.length > TURF_MAX) continue;
+      const after = turf.houses.length + blocks[i].houses.length;
+      if (after > quota && after - quota > quota - turf.houses.length) continue;
       const d = Math.min(...turf.blocks.map((b) => metres(b, blocks[i])));
       if (d < best) { best = d; pick = i; }
     }
