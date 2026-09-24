@@ -131,6 +131,7 @@ type House = {
   notes: string;
   targets: Voter[];
   companions: Voter[];
+  node: number; // nearest point on the street network; set once, after filtering
 };
 
 const streetOf = (a: string) =>
@@ -171,6 +172,7 @@ for (const h of backup.households) {
     // them greyed means the volunteer knows who they are talking to; leaving
     // them off means the sheet looks wrong the moment one answers.
     companions: live.filter((v) => !TARGETABLE.has(v.activity_level)),
+    node: -1,
   });
 }
 
@@ -180,9 +182,196 @@ const metres = (a: { lat: number; lon: number }, b: { lat: number; lon: number }
   return Math.hypot(x, y);
 };
 
+// ---- the street network -----------------------------------------------------
+//
+// Cached OSM centrelines, loaded once. They do two jobs: the map printed at the
+// top of each packet, and -- more importantly -- the distances the turfs are
+// grouped by.
+
+// Street names come from two different worlds: the roll abbreviates ("ROSITA
+// RD"), OSM spells out ("Rosita Road"). Normalise the suffix to one spelling --
+// but KEEP it. Dropping it entirely looks tidier and is wrong here: Del Rey
+// Oaks has both a Carlton Drive and a Carlton Place, and a Portola Drive and a
+// Portola Avenue, and collapsing them drew a neighbouring street as if it were
+// one of this turf's own.
+const SUFFIX: Record<string, string> = {
+  ROAD: "RD", RD: "RD", DRIVE: "DR", DR: "DR", AVENUE: "AVE", AVE: "AVE",
+  PLACE: "PL", PL: "PL", COURT: "CT", CT: "CT", CIRCLE: "CIR", CIR: "CIR",
+  STREET: "ST", ST: "ST", LANE: "LN", LN: "LN", HIGHWAY: "HWY", HWY: "HWY",
+  BOULEVARD: "BLVD", BLVD: "BLVD", WAY: "WAY", RUN: "RUN", PATH: "PATH",
+};
+function roadKey(s: string): string {
+  const parts = s.toUpperCase().replace(/\./g, "").replace(/\s+/g, " ").trim().split(" ");
+  const last = parts[parts.length - 1];
+  if (parts.length > 1 && SUFFIX[last]) parts[parts.length - 1] = SUFFIX[last];
+  return parts.join(" ");
+}
+
+type Road = { name: string; kind: string; pts: [number, number][] };
+const ROADS: Road[] = (() => {
+  try {
+    return JSON.parse(
+      Deno.readTextFileSync(new URL("./roads-dro.json", import.meta.url)),
+    ).ways;
+  } catch {
+    console.error("! roads-dro.json missing -- run fetch-roads.ts first");
+    return [];
+  }
+})();
+
+//
+// Turfs used to be grouped by straight-line distance, and it was wrong in a way
+// that nothing on the sheet revealed. Rosita, Paloma and Via Verde run parallel
+// and meet only at their far ends, so doors 500m apart as the crow flies are a
+// round trip on foot. One turf measured a tidy 528m across and was a 7.7km
+// walk. Grouping runs on network distance instead, which also keeps a turf on
+// one street without having to be told to: along a street is near, across the
+// back fence is not.
+
+type Graph = { pos: { lat: number; lon: number }[]; adj: [number, number][][] };
+const graph: Graph = { pos: [], adj: [] };
+const nodeIdx = new Map<string, number>();
+function nodeAt(lat: number, lon: number): number {
+  const k = `${lat.toFixed(5)},${lon.toFixed(5)}`;
+  let i = nodeIdx.get(k);
+  if (i === undefined) {
+    i = graph.pos.length;
+    nodeIdx.set(k, i);
+    graph.pos.push({ lat, lon });
+    graph.adj.push([]);
+  }
+  return i;
+}
+// Which named streets each node belongs to, so a house can be attached to its
+// own street rather than to whatever happens to be nearest.
+const nodeStreets = new Map<number, Set<string>>();
+for (const w of ROADS) {
+  if (/^(trunk|motorway)$/.test(w.kind)) continue; // not walkable for canvassing
+  const k = w.name ? roadKey(w.name) : "";
+  for (let i = 0; i < w.pts.length; i++) {
+    const a = nodeAt(w.pts[i][0], w.pts[i][1]);
+    if (k) {
+      if (!nodeStreets.has(a)) nodeStreets.set(a, new Set());
+      nodeStreets.get(a)!.add(k);
+    }
+    if (i) {
+      const b = nodeAt(w.pts[i - 1][0], w.pts[i - 1][1]);
+      const d = metres(graph.pos[a], graph.pos[b]);
+      graph.adj[a].push([b, d]);
+      graph.adj[b].push([a, d]);
+    }
+  }
+}
+
+// Attach a house to ITS OWN street by name, falling back to any named road and
+// only then to whatever is closest.
+//
+// Nearest-node snapping alone is badly wrong here. Half of these houses have an
+// unnamed service way -- a driveway or a parking aisle -- passing closer than
+// their own street, and those rejoin the network somewhere else entirely. Two
+// doors 674m apart on Rosita measured 6km apart because one of them had been
+// attached to a driveway, and that produced turfs that looked compact and were
+// seven-kilometre walks.
+function nearestNode(p: { lat: number; lon: number }, street?: string): number {
+  const want = street ? roadKey(street) : "";
+  let best = -1, bd = Infinity;
+  let namedBest = -1, namedBd = Infinity;
+  let anyBest = 0, anyBd = Infinity;
+  for (let i = 0; i < graph.pos.length; i++) {
+    const d = metres(p, graph.pos[i]);
+    if (d < anyBd) { anyBd = d; anyBest = i; }
+    const names = nodeStreets.get(i);
+    if (!names) continue;
+    if (d < namedBd) { namedBd = d; namedBest = i; }
+    if (want && names.has(want) && d < bd) { bd = d; best = i; }
+  }
+  // A match on the right street is worth walking a little further to reach; a
+  // house is not 250m from its own street, so that far out it is the roll that
+  // is wrong and nearest-named is the better guess.
+  if (best >= 0 && bd < 250) return best;
+  if (namedBest >= 0) return namedBest;
+  return anyBest;
+}
+
+// Binary heap Dijkstra. A sorted-array queue is fine for one run and far too
+// slow once every block wants its own.
+function dijkstra(src: number): Float64Array {
+  const dist = new Float64Array(graph.pos.length).fill(Infinity);
+  dist[src] = 0;
+  const heap: [number, number][] = [[0, src]];
+  const up = (i: number) => {
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (heap[p][0] <= heap[i][0]) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]];
+      i = p;
+    }
+  };
+  const down = (i: number) => {
+    for (;;) {
+      const l = i * 2 + 1, r = l + 1;
+      let s = i;
+      if (l < heap.length && heap[l][0] < heap[s][0]) s = l;
+      if (r < heap.length && heap[r][0] < heap[s][0]) s = r;
+      if (s === i) break;
+      [heap[s], heap[i]] = [heap[i], heap[s]];
+      i = s;
+    }
+  };
+  while (heap.length) {
+    const [d, u] = heap[0];
+    heap[0] = heap[heap.length - 1];
+    heap.pop();
+    if (heap.length) down(0);
+    if (d > dist[u]) continue;
+    for (const [v, w] of graph.adj[u]) {
+      const nd = d + w;
+      if (nd < dist[v]) { dist[v] = nd; heap.push([nd, v]); up(heap.length - 1); }
+    }
+  }
+  return dist;
+}
+
+const km = (m: number) => m < 950 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`;
+
+const distCache = new Map<number, Float64Array>();
+function walkMetres(a: { node: number }, b: { node: number }): number {
+  if (!distCache.has(a.node)) distCache.set(a.node, dijkstra(a.node));
+  const d = distCache.get(a.node)![b.node];
+  // Disconnected (a snapping accident, or a genuinely cut-off stub) must never
+  // read as "close" -- that is exactly how the bad turfs got built.
+  return isFinite(d) ? d : 1e6;
+}
+
+// Door-to-door walking length, taking the nearest unvisited door each time.
+// Not the optimal route -- that is the travelling salesman -- but it is how a
+// person actually walks a street, and it is an honest number in a way that
+// straight-line span is not. Span said 528m for what was a 7.7km afternoon.
+function routeMetres(hs: { node: number }[]): number {
+  if (hs.length < 2) return 0;
+  const left = new Set(hs.keys());
+  let cur = 0, total = 0;
+  left.delete(0);
+  while (left.size) {
+    let pick = -1, best = Infinity;
+    for (const j of left) {
+      const d = walkMetres(hs[cur], hs[j]);
+      if (d < best) { best = d; pick = j; }
+    }
+    total += best;
+    cur = pick;
+    left.delete(pick);
+  }
+  return total;
+}
+
 // ---- blocks -> turfs --------------------------------------------------------
 
-type Block = { street: string; houses: House[]; lat: number; lon: number };
+// Put every door on the street network once, up front: the grouping asks for
+// distances between blocks thousands of times.
+for (const h of houses) h.node = nearestNode(h, h.street);
+
+type Block = { street: string; houses: House[]; lat: number; lon: number; node: number };
 const blocks: Block[] = [];
 const byStreet = new Map<string, House[]>();
 for (const h of houses) {
@@ -199,6 +388,9 @@ for (const [street, arr] of byStreet) {
       houses: run,
       lat: run.reduce((s, h) => s + h.lat, 0) / run.length,
       lon: run.reduce((s, h) => s + h.lon, 0) / run.length,
+      // Anchor on a real door rather than the averaged centre: the mean of a
+      // curved street can land off the network entirely.
+      node: run[Math.floor(run.length / 2)].node,
     });
     run = [];
   };
@@ -239,6 +431,8 @@ while (unassigned.size) {
     const d = metres(blocks[i], mid);
     if (d > far) { far = d; seed = i; }
   }
+  // Seeding is still by straight line -- it only picks a corner of town to
+  // start from, and the walking cost of getting there is nobody's problem.
   const turf: Turf = { blocks: [blocks[seed]], houses: [...blocks[seed].houses] };
   unassigned.delete(seed);
   while (turf.houses.length < quota && unassigned.size) {
@@ -249,7 +443,12 @@ while (unassigned.size) {
     for (const i of unassigned) {
       const after = turf.houses.length + blocks[i].houses.length;
       if (after > quota && after - quota > quota - turf.houses.length) continue;
-      const d = Math.min(...turf.blocks.map((b) => metres(b, blocks[i])));
+      // Score by the FURTHEST block already in the turf, not the nearest.
+      // Nearest-block growth chains: every step is short, but the two ends end
+      // up across town from each other, and two turfs came out as 7km walks
+      // that measured under 500m across. Taking the candidate whose worst case
+      // is smallest bounds how far apart a turf's extremes can get.
+      const d = Math.max(...turf.blocks.map((b) => walkMetres(b, blocks[i])));
       if (d < best) { best = d; pick = i; }
     }
     if (pick < 0) break;
@@ -363,41 +562,6 @@ const boxes = (labels: string[]) =>
 // and nothing about it can fail silently in a print dialog the way a background
 // image does.
 
-type Road = { name: string; kind: string; pts: [number, number][] };
-const ROADS: Road[] = (() => {
-  try {
-    return JSON.parse(
-      Deno.readTextFileSync(new URL("./roads-dro.json", import.meta.url)),
-    ).ways;
-  } catch {
-    console.error("! roads-dro.json missing -- run fetch-roads.ts; maps omitted");
-    return [];
-  }
-})();
-
-// Street names come from two different worlds: the roll abbreviates ("ROSITA
-// RD"), OSM spells out ("Rosita Road"). Normalise the suffix to one spelling --
-// but KEEP it. Dropping it entirely looks tidier and is wrong here: Del Rey
-// Oaks has both a Carlton Drive and a Carlton Place, and a Portola Drive and a
-// Portola Avenue, and collapsing them drew a neighbouring street as if it were
-// one of this turf's own.
-const SUFFIX: Record<string, string> = {
-  ROAD: "RD", RD: "RD", DRIVE: "DR", DR: "DR", AVENUE: "AVE", AVE: "AVE",
-  PLACE: "PL", PL: "PL", COURT: "CT", CT: "CT", CIRCLE: "CIR", CIR: "CIR",
-  STREET: "ST", ST: "ST", LANE: "LN", LN: "LN", HIGHWAY: "HWY", HWY: "HWY",
-  BOULEVARD: "BLVD", BLVD: "BLVD", WAY: "WAY", RUN: "RUN", PATH: "PATH",
-};
-function roadKey(s: string): string {
-  const parts = s.toUpperCase().replace(/\./g, "").replace(/\s+/g, " ").trim().split(" ");
-  const last = parts[parts.length - 1];
-  if (parts.length > 1 && SUFFIX[last]) parts[parts.length - 1] = SUFFIX[last];
-  return parts.join(" ");
-}
-
-// On the map the suffix is dead weight: a stub drawn as a stub is obviously a
-// Place, and five adjacent cul-de-sacs printed as "Baxter Place Hillwil Place
-// Voe Place" ran into each other. Streets keep theirs, since Carlton Drive and
-// Carlton Place are both here and both matter.
 const shortName = (s: string) => s.replace(/\s+(Place|Court|Circle)$/, "");
 
 const MAP_W = 640;          // svg user units; CSS scales it to the page width
@@ -574,7 +738,7 @@ function renderTurf(turf: Turf, n: number, total: number): string {
   return `<section class="turf">
 <header>
   <h1>CHERYL PARKER · DEL REY OAKS</h1>
-  <p class="sub">Turf ${n} of ${total} &middot; ${turf.houses.length} households &middot; ${targetCount} people to ask</p>
+  <p class="sub">Turf ${n} of ${total} &middot; ${turf.houses.length} households &middot; ${targetCount} people to ask &middot; about ${km(routeMetres(turf.houses))} on foot</p>
 </header>
 <div class="fill">
   <span><b>Volunteer</b></span><span><b>Date</b></span><span><b>Finished</b></span>
@@ -623,13 +787,12 @@ turfs.forEach((turf, i) => {
   Deno.writeTextFileSync(`${OUT}/${file}`, page(`Turf ${n}`, inner));
 
   const streets = [...new Set(turf.blocks.map((b) => b.street))].sort();
-  let span = 0;
-  for (const a of turf.houses) for (const b of turf.houses) span = Math.max(span, metres(a, b));
   const targets = turf.houses.reduce((s, h) => s + h.targets.length, 0);
+  const route = routeMetres(turf.houses);
   rows.push(`<tr><td><a href="${file}">Turf ${n}</a></td><td>${turf.houses.length}</td>` +
-    `<td>${targets}</td><td>${Math.round(span)} m</td><td>${streets.map(esc).join(", ")}</td></tr>`);
+    `<td>${targets}</td><td>${km(route)}</td><td>${streets.map(esc).join(", ")}</td></tr>`);
   console.log(`turf ${String(n).padStart(2)}  ${String(turf.houses.length).padStart(3)} hh  ` +
-    `${String(targets).padStart(3)} targets  ${String(Math.round(span)).padStart(4)}m  ${streets.join(", ")}`);
+    `${String(targets).padStart(3)} targets  ${km(route).padStart(6)} walk  ${streets.join(", ")}`);
 });
 
 Deno.writeTextFileSync(`${OUT}/all-turfs.html`, combined(allParts));
@@ -649,7 +812,7 @@ ${turfs.length} turfs</p></header>
 new sheet, and every page carries its turf number, so the stack splits straight into packets.
 One packet per volunteer. Set <b>Walker name</b> in the app to that volunteer's
 name before typing their sheets in, so <code>contacted_by</code> records who actually knocked.</p>
-<table><tr><th>Turf</th><th>Households</th><th>People</th><th>Span</th><th>Streets</th></tr>
+<table><tr><th>Turf</th><th>Households</th><th>People</th><th>On foot</th><th>Streets</th></tr>
 ${rows.join("\n")}</table>
 </body></html>`);
 
