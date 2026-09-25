@@ -78,7 +78,7 @@ function newestContactList(): string | null {
 // address|name, matching how the app keys a voter. The list also carries
 // VoterID, which joins perfectly to the master, but the app's own records are
 // keyed on address and name and that is what has to match here.
-function loadContactList(): Set<string> | null {
+function loadContactList(): Map<string, string> | null {
   const path = newestContactList();
   if (!path) {
     console.error(`! no *_volunteer_contact_list.csv in ${CONTACT_DIR}`);
@@ -90,18 +90,20 @@ function loadContactList(): Set<string> | null {
   const head = lines[0].split(",").map((h) => h.trim());
   const iName = head.indexOf("Voter Name");
   const iAddr = head.indexOf("Street Address");
+  const iWhy = head.indexOf("Reason");
   if (iName < 0 || iAddr < 0) {
     console.error("! contact list is missing 'Voter Name' or 'Street Address'");
     return null;
   }
   const norm = (s: string) => String(s || "").trim().toUpperCase().replace(/\s+/g, " ");
-  const out = new Set<string>();
+  const out = new Map<string, string>();
   for (const line of lines.slice(1)) {
     // No quoted commas in this file, but split defensively on the known column
     // count rather than assuming.
     const cells = line.split(",");
     if (cells.length < head.length) continue;
-    out.add(`${norm(cells[iAddr])}|${norm(cells[iName])}`);
+    const why = iWhy >= 0 ? String(cells[iWhy] || "").replace(/^CONTACT:\s*/, "").trim() : "";
+    out.set(`${norm(cells[iAddr])}|${norm(cells[iName])}`, why);
   }
   return out;
 }
@@ -156,6 +158,8 @@ if (!CONTACTS) Deno.exit(2);
 const normKey = (s: string) => String(s || "").trim().toUpperCase().replace(/\s+/g, " ");
 const onContactList = (v: { address: string; name: string }) =>
   CONTACTS.has(`${normKey(v.address)}|${normKey(v.name)}`);
+const whyOnList = (v: { address: string; name: string }) =>
+  CONTACTS.get(`${normKey(v.address)}|${normKey(v.name)}`) || "";
 
 const backup = JSON.parse(Deno.readTextFileSync(BACKUP));
 if (backup.format !== "dro-canvass-backup") {
@@ -180,6 +184,8 @@ type House = {
   lat: number;
   lon: number;
   notes: string;
+  status: string;
+  lastTried: string;
   targets: Voter[];
   companions: Voter[];
   node: number; // nearest point on the street network; set once, after filtering
@@ -218,6 +224,8 @@ for (const h of backup.households) {
     lat: h.lat,
     lon: h.lon,
     notes: (h.notes || "").trim(),
+    status: h.contact_status || "not_visited",
+    lastTried: h.contacted_at ? String(h.contacted_at).slice(0, 10) : "",
     targets,
     // Inactive housemates still live here and still open the door. Printing
     // them greyed means the volunteer knows who they are talking to; leaving
@@ -841,12 +849,36 @@ for (const f of Deno.readDirSync(OUT)) {
 const stamp = new Date().toISOString().slice(0, 10);
 const rows: string[] = [];
 const allParts: string[] = [];
+
+// A reviewable copy of the same list, for someone who knows the town to scan
+// and strike names off. It is emitted from this loop rather than a script of
+// its own so it cannot drift from what is printed -- a review list that
+// disagrees with the sheets is worse than none.
+const csvCell = (s: string | number) => {
+  const v = String(s ?? "");
+  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+};
+const csv: string[][] = [[
+  "Skip?", "Name", "Address", "Party", "Age", "Turf",
+  "Already tried", "Voting record", "Notes on the house",
+]];
 turfs.forEach((turf, i) => {
   const n = i + 1;
   const file = `turf-${String(n).padStart(2, "0")}.html`;
   const inner = renderTurf(turf, n, turfs.length);
   allParts.push(inner);
   Deno.writeTextFileSync(`${OUT}/${file}`, page(`Turf ${n}`, inner));
+
+  // Street then house number, so a reviewer walks the list the way they picture
+  // the town rather than the way the turf happens to be ordered.
+  for (const h of [...turf.houses].sort((a, b) =>
+    a.street.localeCompare(b.street) || a.num - b.num)) {
+    for (const v of h.targets) {
+      csv.push(["", v.name.trim(), h.address, v.party, v.age, String(n),
+        h.status === "not_visited" ? "never knocked" : `${h.status} ${h.lastTried}`.trim(),
+        whyOnList(v), noteLine(h.notes)]);
+    }
+  }
 
   const streets = [...new Set(turf.blocks.map((b) => b.street))].sort();
   const targets = turf.houses.reduce((s, h) => s + h.targets.length, 0);
@@ -858,6 +890,19 @@ turfs.forEach((turf, i) => {
 });
 
 Deno.writeTextFileSync(`${OUT}/all-turfs.html`, combined(allParts));
+
+// Sort the whole thing by street and number, across turfs, so the reviewer sees
+// one pass through the town instead of eleven.
+const body = csv.slice(1).sort((a, b) => {
+  const st = (s: string) => s.replace(/^[0-9]+[A-Za-z]?\s+/, "").toUpperCase();
+  return st(a[2]).localeCompare(st(b[2])) ||
+    (parseInt(a[2], 10) || 0) - (parseInt(b[2], 10) || 0) ||
+    a[1].localeCompare(b[1]);
+});
+Deno.writeTextFileSync(
+  `${OUT}/contact-list-for-review_${stamp}.csv`,
+  "﻿" + [csv[0], ...body].map((r) => r.map(csvCell).join(",")).join("\r\n") + "\r\n",
+);
 
 Deno.writeTextFileSync(`${OUT}/index.html`, `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>Walk list ${stamp}</title>
