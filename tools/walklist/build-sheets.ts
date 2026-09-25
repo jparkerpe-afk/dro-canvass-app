@@ -332,7 +332,18 @@ function dijkstra(src: number): Float64Array {
   return dist;
 }
 
-const km = (m: number) => m < 950 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`;
+// Everything a volunteer reads is in yards or miles. The metres are internal --
+// they come from the OSM geometry and there is no reason to convert those --
+// but nobody walking Del Rey Oaks thinks in kilometres.
+const YD_PER_M = 1.09361;
+const YD_PER_MILE = 1760;
+function distance(m: number): string {
+  const yd = m * YD_PER_M;
+  // Half a mile is about where "880 yards" stops being a picture of a walk.
+  if (yd < YD_PER_MILE / 2) return `${Math.round(yd / 10) * 10} yards`;
+  const mi = yd / YD_PER_MILE;
+  return `${mi.toFixed(1)} ${mi < 1.05 && mi >= 0.95 ? "mile" : "miles"}`;
+}
 
 const distCache = new Map<number, Float64Array>();
 function walkMetres(a: { node: number }, b: { node: number }): number {
@@ -672,10 +683,11 @@ function turfMap(turf: Turf): string {
     `<circle cx="${sx(h.lon).toFixed(1)}" cy="${sy(h.lat).toFixed(1)}" r="3.4" class="ho"/>`).join("");
 
   // Scale bar: a round number of metres that fits comfortably across.
-  const want = (halfW * 2) / 4;
-  const nice = [50, 100, 150, 200, 250, 500].reduce((a, b) =>
-    Math.abs(b - want) < Math.abs(a - want) ? b : a);
-  const barPx = (nice / (halfW * 2)) * MAP_W;
+  // Round yards, not round metres -- a bar labelled "229 yards" is no use.
+  const wantYd = (halfW * 2 * YD_PER_M) / 4;
+  const niceYd = [50, 100, 150, 200, 250, 300, 440, 880].reduce((a, b) =>
+    Math.abs(b - wantYd) < Math.abs(a - wantYd) ? b : a);
+  const barPx = ((niceYd / YD_PER_M) / (halfW * 2)) * MAP_W;
 
   return `<svg class="map" viewBox="0 0 ${MAP_W} ${MAP_H}" role="img" aria-label="Map of this turf">
   <rect width="${MAP_W}" height="${MAP_H}" fill="#fff"/>
@@ -687,7 +699,7 @@ function turfMap(turf: Turf): string {
     <line x1="0" y1="0" x2="${barPx.toFixed(1)}" y2="0" class="bar"/>
     <line x1="0" y1="-4" x2="0" y2="4" class="bar"/>
     <line x1="${barPx.toFixed(1)}" y1="-4" x2="${barPx.toFixed(1)}" y2="4" class="bar"/>
-    <text x="${(barPx / 2).toFixed(1)}" y="-7" class="sc">${nice} m</text>
+    <text x="${(barPx / 2).toFixed(1)}" y="-7" class="sc">${niceYd} yards</text>
   </g>
   <g transform="translate(${MAP_W - 20} 22)">
     <path d="M0 8 L0 -8 M0 -8 L-3.5 -3 M0 -8 L3.5 -3" class="bar"/>
@@ -738,7 +750,7 @@ function renderTurf(turf: Turf, n: number, total: number): string {
   return `<section class="turf">
 <header>
   <h1>CHERYL PARKER · DEL REY OAKS</h1>
-  <p class="sub">Turf ${n} of ${total} &middot; ${turf.houses.length} households &middot; ${targetCount} people to ask &middot; about ${km(routeMetres(turf.houses))} on foot</p>
+  <p class="sub">Turf ${n} of ${total} &middot; ${turf.houses.length} households &middot; ${targetCount} people to ask &middot; about ${distance(routeMetres(turf.houses))} on foot</p>
 </header>
 <div class="fill">
   <span><b>Volunteer</b></span><span><b>Date</b></span><span><b>Finished</b></span>
@@ -747,7 +759,6 @@ function renderTurf(turf: Turf, n: number, total: number): string {
   Mark one outcome per <b>address</b>, and yes / maybe / no for each <b>person you actually speak to</b>.
   Leave a person blank if you did not talk to them &mdash; blank is not a no.
   Names in grey are registered at the address but are not on our list; if one answers the door, talk to them anyway and write it in the notes.
-  <b>Yard signs, moved-away, wrong address:</b> write it on the notes line.
 </p>
 ${turfMap(turf)}
 <p class="map-cap">Every dot is a door on this sheet. Streets in bold are yours; the paler ones are just there to get your bearings.</p>
@@ -790,9 +801,9 @@ turfs.forEach((turf, i) => {
   const targets = turf.houses.reduce((s, h) => s + h.targets.length, 0);
   const route = routeMetres(turf.houses);
   rows.push(`<tr><td><a href="${file}">Turf ${n}</a></td><td>${turf.houses.length}</td>` +
-    `<td>${targets}</td><td>${km(route)}</td><td>${streets.map(esc).join(", ")}</td></tr>`);
+    `<td>${targets}</td><td>${distance(route)}</td><td>${streets.map(esc).join(", ")}</td></tr>`);
   console.log(`turf ${String(n).padStart(2)}  ${String(turf.houses.length).padStart(3)} hh  ` +
-    `${String(targets).padStart(3)} targets  ${km(route).padStart(6)} walk  ${streets.join(", ")}`);
+    `${String(targets).padStart(3)} targets  ${distance(route).padStart(9)} walk  ${streets.join(", ")}`);
 });
 
 Deno.writeTextFileSync(`${OUT}/all-turfs.html`, combined(allParts));
