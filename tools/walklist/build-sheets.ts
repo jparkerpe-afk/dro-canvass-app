@@ -35,9 +35,9 @@ function newestBackup(): string {
 
 // ---- the filter -------------------------------------------------------------
 //
-// Agreed with Jed 2026-09-22. A household drops out if ANY of these hold; a
-// person drops off an otherwise-listed household if their activity level is
-// Inactive. Every rule here is a decision, not a technicality, so each says why.
+// A household drops out if ANY of these hold; a person drops off an otherwise-
+// listed household if they are not on the volunteer contact list. Every rule
+// here is a decision, not a technicality, so each one says why.
 
 // Deferred: the two condo complexes are a different problem (106 households,
 // unreliable pins, shared entrances) and get their own walk.
@@ -56,10 +56,55 @@ const ANSWERED = ["talked", "refused", "moved", "wrong_address"];
 // conversation has happened.
 const YES = new Set(["strong_yes", "lean_yes"]);
 
-// Keep anyone with a pulse in the voter file. "New / Not Yet Rated" is not a
-// positive activity level, but it is not Inactive either -- it means a new
-// registration with no history yet, which is the most movable voter there is.
-const TARGETABLE = new Set(["Active", "Mild", "New / Not Yet Rated"]);
+// Who counts as a target comes from the volunteer contact list, not from the
+// roll's Activity Level. The two disagree, and the list is measuring the right
+// thing: 129 people the roll calls Inactive turn out for LOCAL elections --
+// seventeen of them in four out of four -- while 22 the roll calls Active never
+// vote in a city race. Activity Level is a state-and-federal signal, and this
+// is a city council seat.
+//
+// The list is generated elsewhere and dropped into the archive folder. Newest
+// wins, and the build prints which it used, for the same reason the backup does.
+const CONTACT_DIR = "C:/DRO/Data/archive";
+
+function newestContactList(): string | null {
+  const files = [...Deno.readDirSync(CONTACT_DIR)]
+    .filter((f) => f.isFile && /_volunteer_contact_list\.csv$/.test(f.name))
+    .map((f) => f.name)
+    .sort();
+  return files.length ? `${CONTACT_DIR}/${files[files.length - 1]}` : null;
+}
+
+// address|name, matching how the app keys a voter. The list also carries
+// VoterID, which joins perfectly to the master, but the app's own records are
+// keyed on address and name and that is what has to match here.
+function loadContactList(): Set<string> | null {
+  const path = newestContactList();
+  if (!path) {
+    console.error(`! no *_volunteer_contact_list.csv in ${CONTACT_DIR}`);
+    return null;
+  }
+  console.log(`targets from ${path.split("/").pop()}`);
+  const text = Deno.readTextFileSync(path);
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  const head = lines[0].split(",").map((h) => h.trim());
+  const iName = head.indexOf("Voter Name");
+  const iAddr = head.indexOf("Street Address");
+  if (iName < 0 || iAddr < 0) {
+    console.error("! contact list is missing 'Voter Name' or 'Street Address'");
+    return null;
+  }
+  const norm = (s: string) => String(s || "").trim().toUpperCase().replace(/\s+/g, " ");
+  const out = new Set<string>();
+  for (const line of lines.slice(1)) {
+    // No quoted commas in this file, but split defensively on the known column
+    // count rather than assuming.
+    const cells = line.split(",");
+    if (cells.length < head.length) continue;
+    out.add(`${norm(cells[iAddr])}|${norm(cells[iName])}`);
+  }
+  return out;
+}
 
 // Individually ruled off by Jed, for a mix of reasons: not a residence, not
 // reachable on foot, already handled by him directly, or a door where sending
@@ -105,6 +150,12 @@ const BACKUP = args[0] || newestBackup();
 const OUT = flag("--out") || DEFAULT_OUT;
 const SIZE = Number(flag("--size")) || TURF_TARGET;
 console.log(`reading ${BACKUP.split("/").pop()}`);
+
+const CONTACTS = loadContactList();
+if (!CONTACTS) Deno.exit(2);
+const normKey = (s: string) => String(s || "").trim().toUpperCase().replace(/\s+/g, " ");
+const onContactList = (v: { address: string; name: string }) =>
+  CONTACTS.has(`${normKey(v.address)}|${normKey(v.name)}`);
 
 const backup = JSON.parse(Deno.readTextFileSync(BACKUP));
 if (backup.format !== "dro-canvass-backup") {
@@ -156,8 +207,8 @@ for (const h of backup.households) {
   if (h.sign) continue;
   if (live.some((v) => YES.has(v.support_level))) continue;
 
-  const targets = live.filter((v) => TARGETABLE.has(v.activity_level));
-  if (!targets.length) continue; // everyone here is Inactive
+  const targets = live.filter((v) => onContactList(v));
+  if (!targets.length) continue; // nobody here is worth a volunteer's visit
 
   houses.push({
     id: h.id,
@@ -171,7 +222,7 @@ for (const h of backup.households) {
     // Inactive housemates still live here and still open the door. Printing
     // them greyed means the volunteer knows who they are talking to; leaving
     // them off means the sheet looks wrong the moment one answers.
-    companions: live.filter((v) => !TARGETABLE.has(v.activity_level)),
+    companions: live.filter((v) => !onContactList(v)),
     node: -1,
   });
 }
