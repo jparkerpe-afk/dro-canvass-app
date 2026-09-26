@@ -846,7 +846,15 @@ for (const f of Deno.readDirSync(OUT)) {
   if (f.isFile && f.name.endsWith(".html")) Deno.removeSync(`${OUT}/${f.name}`);
 }
 
-const stamp = new Date().toISOString().slice(0, 10);
+// Local date, not UTC. An evening build in California is already tomorrow in
+// UTC, so toISOString() stamps a file with a date nobody here has lived
+// through yet -- and this name is what tells a reviewer which copy is current.
+const now = new Date();
+const stamp = [
+  now.getFullYear(),
+  String(now.getMonth() + 1).padStart(2, "0"),
+  String(now.getDate()).padStart(2, "0"),
+].join("-");
 const rows: string[] = [];
 const allParts: string[] = [];
 
@@ -899,10 +907,19 @@ const body = csv.slice(1).sort((a, b) => {
     (parseInt(a[2], 10) || 0) - (parseInt(b[2], 10) || 0) ||
     a[1].localeCompare(b[1]);
 });
+const reviewCsv = `contact-list-for-review_${stamp}.csv`;
 Deno.writeTextFileSync(
-  `${OUT}/contact-list-for-review_${stamp}.csv`,
+  `${OUT}/${reviewCsv}`,
   "﻿" + [csv[0], ...body].map((r) => r.map(csvCell).join(",")).join("\r\n") + "\r\n",
 );
+// Retire every earlier review copy. Two dated files in a folder is how the
+// wrong one gets emailed, and this one regenerates in seconds.
+for (const f of Deno.readDirSync(OUT)) {
+  if (f.isFile && /^contact-list-for-review_.*\.csv$/.test(f.name) && f.name !== reviewCsv) {
+    Deno.removeSync(`${OUT}/${f.name}`);
+    console.log(`  retired superseded review list: ${f.name}`);
+  }
+}
 
 Deno.writeTextFileSync(`${OUT}/index.html`, `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><title>Walk list ${stamp}</title>
