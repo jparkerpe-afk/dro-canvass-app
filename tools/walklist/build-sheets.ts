@@ -471,62 +471,101 @@ for (const [street, arr] of byStreet) {
   flush();
 }
 
-// Greedy: seed each turf at whatever is furthest from the centre of what is
-// left, then accrete the nearest block until the turf is full. Seeding at the
-// edge rather than the middle stops the last turf being a ring of leftovers
-// scattered around the town.
+// A turf is a stretch of ONE arterial plus the cul-de-sacs hanging off it.
 //
-// Each turf takes a share of what is still unassigned, recomputed as the build
-// goes: ceil(houses left / turfs left). A fixed fill line does not work, because
-// a turf that overshoots its share steals from the turfs after it and the last
-// one starves -- the first rebuild after a walk produced turfs of 33 and 14,
-// and a volunteer handed the stub is finished in forty minutes while another is
-// still out. Recomputing after every turf makes the error self-correcting: take
-// one house too many here and the quota for everyone after drops to absorb it.
-const turfCount = Math.max(1, Math.round(houses.length / SIZE));
+// Clustering purely on walking distance got the distances right and the shape
+// wrong. Every arterial in this town runs east-west -- Portola -12 degrees,
+// Rosita -24, Paloma -16, Via Verde -11 -- and Rosita and Paloma are only 58m
+// apart north to south. So two parallel arterials are near each other
+// everywhere along their length, and a distance-only grouping kept pairing
+// them. On paper that reads as one compact turf; on foot it is two streets
+// that happen to back onto each other, and a volunteer crosses between them
+// over and over.
+//
+// So arterials come first, and the walk runs along one of them.
+
+// A street is an arterial if it carries a lot of doors. Counted over the whole
+// roll rather than the walk list, so a street does not stop being an arterial
+// halfway through the campaign as its doors get knocked off the list.
+const ARTERIAL_MIN_DOORS = 14;
+const doorsOnStreet = new Map<string, number>();
+for (const h of backup.households) {
+  const s = streetOf(h.address);
+  doorsOnStreet.set(s, (doorsOnStreet.get(s) || 0) + 1);
+}
+const arterials = new Set(
+  [...doorsOnStreet].filter(([s, n]) =>
+    n >= ARTERIAL_MIN_DOORS && !DEFERRED.test(s)).map(([s]) => s),
+);
+
+// Every block belongs to an arterial: its own street if it is one, otherwise
+// the arterial it is closest to ON FOOT. A cul-de-sac is walked from the street
+// it opens onto, which is not always the one it looks nearest to on a map.
+//
+// The anchors come from EVERY door on an arterial, not just the ones still on
+// the walk list. Which street a cul-de-sac opens onto is a fact about the town
+// and does not change because we knocked on it; measuring against the survivors
+// makes the answer drift as the campaign goes on, and eventually flips a stub
+// onto a street it does not touch. Altura already measured 0m from Angelus
+// across all doors and 81m across the remaining ones.
+const arterialAnchors = backup.households
+  .filter((h: { address: string; lat: number; lon: number }) =>
+    arterials.has(streetOf(h.address)) &&
+    Number.isFinite(h.lat) && Number.isFinite(h.lon))
+  .map((h: { address: string; lat: number; lon: number }) => ({
+    street: streetOf(h.address),
+    node: nearestNode(h, streetOf(h.address)),
+  }));
+
+function parentArterial(b: Block): string {
+  if (arterials.has(b.street)) return b.street;
+  // Compare real doors, not the block's anchor. A block anchor is one house
+  // standing in for up to eight, and on a short stub that was enough to send
+  // Loch Pl to the wrong arterial.
+  let best = b.street, bd = Infinity;
+  for (const a of arterialAnchors) {
+    for (const h of b.houses) {
+      const d = walkMetres(h, a);
+      if (d < bd) { bd = d; best = a.street; }
+    }
+  }
+  return best;
+}
 
 type Turf = { blocks: Block[]; houses: House[] };
-const unassigned = new Set(blocks.keys());
+const byArterial = new Map<string, Block[]>();
+for (const b of blocks) {
+  const p = parentArterial(b);
+  if (!byArterial.has(p)) byArterial.set(p, []);
+  byArterial.get(p)!.push(b);
+}
+
+// Within an arterial, walk it end to end: order by longitude, since these
+// streets run east-west, and cut into turfs along that line. Cutting anywhere
+// else would put the two halves of a turf on opposite ends of the street.
+//
+// Size is a target here, not a rule. Jed's call: a turf that makes sense on the
+// ground and runs short beats an even one that sends someone back and forth.
+// An arterial with fewer doors left than a turf holds simply becomes a small
+// turf rather than being padded from the street next door.
 const turfs: Turf[] = [];
-while (unassigned.size) {
-  const rest = [...unassigned].map((i) => blocks[i]);
-  const left = rest.reduce((s, b) => s + b.houses.length, 0);
-  const quota = Math.ceil(left / Math.max(1, turfCount - turfs.length));
-  const mid = {
-    lat: rest.reduce((s, b) => s + b.lat, 0) / rest.length,
-    lon: rest.reduce((s, b) => s + b.lon, 0) / rest.length,
-  };
-  let seed = 0, far = -1;
-  for (const i of unassigned) {
-    const d = metres(blocks[i], mid);
-    if (d > far) { far = d; seed = i; }
-  }
-  // Seeding is still by straight line -- it only picks a corner of town to
-  // start from, and the walking cost of getting there is nobody's problem.
-  const turf: Turf = { blocks: [blocks[seed]], houses: [...blocks[seed].houses] };
-  unassigned.delete(seed);
-  while (turf.houses.length < quota && unassigned.size) {
-    // Prefer the nearest block, but never one that overshoots the quota by more
-    // than it undershoots -- taking a whole block to land 4 over is worse than
-    // stopping 2 under, and the next turf inherits the difference either way.
-    let pick = -1, best = Infinity;
-    for (const i of unassigned) {
-      const after = turf.houses.length + blocks[i].houses.length;
-      if (after > quota && after - quota > quota - turf.houses.length) continue;
-      // Score by the FURTHEST block already in the turf, not the nearest.
-      // Nearest-block growth chains: every step is short, but the two ends end
-      // up across town from each other, and two turfs came out as 7km walks
-      // that measured under 500m across. Taking the candidate whose worst case
-      // is smallest bounds how far apart a turf's extremes can get.
-      const d = Math.max(...turf.blocks.map((b) => walkMetres(b, blocks[i])));
-      if (d < best) { best = d; pick = i; }
+for (const [, group] of [...byArterial].sort((a, b) => a[0].localeCompare(b[0]))) {
+  group.sort((a, b) => a.lon - b.lon);
+  const total = group.reduce((s, b) => s + b.houses.length, 0);
+  const cuts = Math.max(1, Math.round(total / SIZE));
+  const per = Math.ceil(total / cuts);
+  let turf: Turf = { blocks: [], houses: [] };
+  for (const b of group) {
+    // Start a new turf once this one is full, but never leave a final scrap
+    // that would be better carried along with the stretch it sits on.
+    if (turf.houses.length >= per && total - turf.houses.length >= 6) {
+      turfs.push(turf);
+      turf = { blocks: [], houses: [] };
     }
-    if (pick < 0) break;
-    turf.blocks.push(blocks[pick]);
-    turf.houses.push(...blocks[pick].houses);
-    unassigned.delete(pick);
+    turf.blocks.push(b);
+    turf.houses.push(...b.houses);
   }
-  turfs.push(turf);
+  if (turf.houses.length) turfs.push(turf);
 }
 turfs.sort((a, b) => b.houses.length - a.houses.length);
 
