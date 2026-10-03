@@ -108,18 +108,47 @@ function loadContactList(): Map<string, string> | null {
   return out;
 }
 
-// Individually ruled off by Jed, for a mix of reasons: not a residence, not
-// reachable on foot, already handled by him directly, or a door where sending
-// a stranger would do more harm than good. Deliberately not annotated per
-// address -- this file is public, and a reason next to an address would
-// publish something about whoever lives there.
-const REMOVED = new Set([
-  "959 VIA VERDE",
-  "2999 MONTEREY SALINAS HWY UNIT 6",
-  "820 ALTURA PL",
-  "7 WALLACE PL",
-  "4 SAUCITO AVE",
-]);
+// Individually ruled off by Jed: not a residence, not reachable on foot,
+// already a known supporter, or a door he handles himself.
+//
+// This lives in a local file, NOT in this source. The repository is public, and
+// the list is people's names against their addresses with a reason beside each
+// -- "already a supporter" is a political fact about a private person and has
+// no business in a public repo. It is also the list that grows every time
+// somebody reviews the sheets, and that should not need a code change.
+//
+// A row with an Address and no Name takes the whole household off. A row with
+// both takes that one person off, and the household goes only if nobody
+// targetable is left at it.
+const EXCLUSIONS_FILE = "C:/DRO/Data/walklist-exclusions.csv";
+
+function loadExclusions(): { houses: Set<string>; people: Set<string> } {
+  const out = { houses: new Set<string>(), people: new Set<string>() };
+  let text: string;
+  try {
+    text = Deno.readTextFileSync(EXCLUSIONS_FILE);
+  } catch {
+    console.error(`! no exclusions file at ${EXCLUSIONS_FILE} -- none applied`);
+    return out;
+  }
+  const norm = (s: string) => String(s || "").trim().toUpperCase().replace(/\s+/g, " ");
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  for (const line of lines.slice(1)) {
+    // Address,Name,Note -- the note can contain commas, so take the first two
+    // fields and leave the rest alone.
+    const cells = line.split(",");
+    const addr = norm(cells[0]);
+    const name = norm(cells[1]);
+    if (!addr) continue;
+    if (name) out.people.add(`${addr}|${name}`);
+    else out.houses.add(addr);
+  }
+  console.log(
+    `exclusions: ${out.houses.size} household(s), ${out.people.size} individual(s)`,
+  );
+  return out;
+}
+const EXCLUDED = loadExclusions();
 
 // ---- turf sizing ------------------------------------------------------------
 //
@@ -160,6 +189,11 @@ const onContactList = (v: { address: string; name: string }) =>
   CONTACTS.has(`${normKey(v.address)}|${normKey(v.name)}`);
 const whyOnList = (v: { address: string; name: string }) =>
   CONTACTS.get(`${normKey(v.address)}|${normKey(v.name)}`) || "";
+// Struck individually. They still print greyed alongside their household, for
+// the same reason an Inactive housemate does: they live there and they may be
+// the one who opens the door.
+const isExcludedPerson = (v: { address: string; name: string }) =>
+  EXCLUDED.people.has(`${normKey(v.address)}|${normKey(v.name)}`);
 
 const backup = JSON.parse(Deno.readTextFileSync(BACKUP));
 if (backup.format !== "dro-canvass-backup") {
@@ -205,7 +239,7 @@ const houses: House[] = [];
 for (const h of backup.households) {
   const street = streetOf(h.address);
   if (DEFERRED.test(street) || OFF_LIST_STREET.test(street)) continue;
-  if (REMOVED.has(h.id)) continue;
+  if (EXCLUDED.houses.has(normKey(h.address))) continue;
 
   const live = (byHousehold.get(h.id) || []).filter((v) => !v.stale);
   if (!live.length) continue; // address exists, nobody registered behind it
@@ -213,7 +247,7 @@ for (const h of backup.households) {
   if (h.sign) continue;
   if (live.some((v) => YES.has(v.support_level))) continue;
 
-  const targets = live.filter((v) => onContactList(v));
+  const targets = live.filter((v) => onContactList(v) && !isExcludedPerson(v));
   if (!targets.length) continue; // nobody here is worth a volunteer's visit
 
   houses.push({
@@ -230,7 +264,7 @@ for (const h of backup.households) {
     // Inactive housemates still live here and still open the door. Printing
     // them greyed means the volunteer knows who they are talking to; leaving
     // them off means the sheet looks wrong the moment one answers.
-    companions: live.filter((v) => !onContactList(v)),
+    companions: live.filter((v) => !onContactList(v) || isExcludedPerson(v)),
     node: -1,
   });
 }
