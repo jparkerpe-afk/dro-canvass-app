@@ -280,7 +280,15 @@ const median = (nums) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
-function spreadCrowdedPins(households) {
+// A pin somebody placed deliberately — dragged onto its building on aerial
+// imagery, or confirmed at the door — is never spread. The grid is a way of
+// making unknown positions reachable; applied to a known one it would take a
+// correction somebody made on purpose and shuffle it back into a row.
+function isPlacedByHand(accuracyType) {
+  return /canvasser confirmed/i.test(String(accuracyType || ''));
+}
+
+function spreadCrowdedPins(households, placedByHand) {
   schematic.clear();
   const display = new Map();
   const mPerLat = 111320;
@@ -291,7 +299,10 @@ function spreadCrowdedPins(households) {
 
   // Union-find over "within CROWD_M of each other", so a row of pins each close
   // to the next becomes one group rather than several overlapping ones.
-  const placed = households.filter((h) => Number.isFinite(h.lat) && Number.isFinite(h.lon));
+  // Hand-placed pins are left out of this entirely: they neither move nor pull
+  // a neighbour out of position.
+  const placed = households.filter((h) =>
+    Number.isFinite(h.lat) && Number.isFinite(h.lon) && !placedByHand.has(h.id));
   const parent = placed.map((_, i) => i);
   const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
   for (let i = 0; i < placed.length; i++) {
@@ -335,13 +346,17 @@ export async function loadHouseholdFeatures(db) {
   ]);
 
   const activeVoterCount = new Map();
+  // Accuracy type rides on the voter rows, not the household, so a household
+  // counts as hand-placed when anyone registered there carries the mark.
+  const placedByHand = new Set();
   for (const voter of voters) {
+    if (isPlacedByHand(voter.accuracy_type)) placedByHand.add(voter.householdId);
     if (voter.stale) continue;
     activeVoterCount.set(voter.householdId, (activeVoterCount.get(voter.householdId) || 0) + 1);
   }
 
   const placed = households.filter((h) => Number.isFinite(h.lat) && Number.isFinite(h.lon));
-  const display = spreadCrowdedPins(placed);
+  const display = spreadCrowdedPins(placed, placedByHand);
 
   return {
     type: 'FeatureCollection',

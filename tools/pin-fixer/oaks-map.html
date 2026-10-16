@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Oaks Pin Mover</title>
+<link rel="stylesheet" href="/maplibre-gl.css">
+<style>
+  :root { --ink:#1a1a1a; --grey:#6b6b6b; --rule:#d6d6d6; --brand:#203864; --moved:#8B371A; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; font:14px/1.45 "Helvetica Neue",Arial,sans-serif; color:var(--ink); }
+  #wrap { display:flex; height:100%; }
+  #map { flex:1; }
+  #side { width:330px; border-left:1px solid var(--rule); display:flex; flex-direction:column; background:#fff; }
+  header { padding:12px 14px; border-bottom:1px solid var(--rule); }
+  h1 { font-size:15px; margin:0; color:var(--brand); letter-spacing:.02em; }
+  .hint { font-size:12px; color:var(--grey); margin:6px 0 0; line-height:1.4; }
+  #list { flex:1; overflow:auto; }
+  .row { padding:7px 14px; border-bottom:1px solid #eee; display:flex; gap:8px; align-items:baseline;
+         cursor:pointer; font-size:13px; }
+  .row:hover { background:#f6f8fb; }
+  .row.dirty { background:#fdf4ef; }
+  .row .addr { font-weight:600; flex:1; }
+  .row .meta { color:var(--grey); font-size:11.5px; }
+  .row .undo { border:0; background:none; color:var(--moved); cursor:pointer; font-size:11.5px;
+               text-decoration:underline; padding:0; }
+  footer { padding:12px 14px; border-top:1px solid var(--rule); }
+  button.primary { width:100%; padding:10px; font-size:14px; font-weight:600; color:#fff;
+                   background:var(--brand); border:0; border-radius:4px; cursor:pointer; }
+  button.primary[disabled] { background:#aab; cursor:default; }
+  #status { font-size:12px; color:var(--grey); margin-top:8px; min-height:16px; }
+  /* Pin markers: a readable unit number, because at a condo the number IS the
+     identifying fact and a bare dot tells you nothing. */
+  .pin { background:var(--brand); color:#fff; font:600 11px/1 Arial,sans-serif; padding:3px 5px;
+         border-radius:3px; border:1.5px solid #fff; cursor:grab; white-space:nowrap;
+         box-shadow:0 1px 3px rgba(0,0,0,.5); }
+  .pin.dirty { background:var(--moved); }
+  .pin.locked { background:#2e7d32; cursor:not-allowed; }
+  .pin.sel { outline:3px solid #ffd54f; }
+  .legend { position:absolute; left:10px; bottom:26px; background:rgba(255,255,255,.92);
+            padding:7px 10px; border-radius:4px; font-size:11.5px; line-height:1.6; }
+  .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px;
+        vertical-align:-1px; border:1px solid #fff; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="map"><div class="legend">
+    <div><span class="sw" style="background:#203864"></span>where it sits now</div>
+    <div><span class="sw" style="background:#8B371A"></span>moved, not saved</div>
+    <div><span class="sw" style="background:#2e7d32"></span>confirmed at the door — locked</div>
+  </div></div>
+  <div id="side">
+    <header>
+      <h1>OAKS PIN MOVER</h1>
+      <p class="hint">Drag a pin onto its own building. Click a row to fly to it.
+      Nothing is written until you press Save.</p>
+    </header>
+    <div id="list"></div>
+    <footer>
+      <button id="save" class="primary" disabled>Save</button>
+      <div id="status"></div>
+    </footer>
+  </div>
+</div>
+
+<script src="/maplibre-gl.js"></script>
+<script>
+const markers = new Map();   // address -> { marker, el, pin }
+const moved   = new Map();   // address -> {lat, lon}
+let pins = [];
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    sources: {
+      // Aerial, not the street map. You are aiming at a roof, and the street
+      // map renders the whole complex as one anonymous block.
+      sat: {
+        type: 'raster',
+        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+        tileSize: 256, maxzoom: 21,
+        attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics'
+      }
+    },
+    layers: [{ id: 'sat', type: 'raster', source: 'sat' }]
+  },
+  center: [-121.8365, 36.5905],
+  zoom: 17.5
+});
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+
+function fmt(n) { return Number(n).toFixed(6); }
+
+function render() {
+  const list = document.getElementById('list');
+  list.innerHTML = '';
+  for (const p of pins) {
+    const row = document.createElement('div');
+    row.className = 'row' + (moved.has(p.address) ? ' dirty' : '');
+    const d = moved.get(p.address);
+    row.innerHTML =
+      '<span class="addr">' + p.address + '</span>' +
+      '<span class="meta">' + p.voters + (p.voters === 1 ? ' voter' : ' voters') +
+      (p.locked ? ' · locked' : '') + '</span>';
+    if (d) {
+      const u = document.createElement('button');
+      u.className = 'undo'; u.textContent = 'undo';
+      u.onclick = (e) => { e.stopPropagation(); revert(p.address); };
+      row.appendChild(u);
+    }
+    row.onclick = () => select(p.address);
+    list.appendChild(row);
+  }
+  const n = moved.size;
+  const btn = document.getElementById('save');
+  btn.disabled = n === 0;
+  btn.textContent = n ? ('Save ' + n + (n === 1 ? ' move' : ' moves')) : 'Save';
+}
+
+function select(address) {
+  const m = markers.get(address);
+  if (!m) return;
+  for (const o of markers.values()) o.el.classList.remove('sel');
+  m.el.classList.add('sel');
+  map.flyTo({ center: m.marker.getLngLat(), zoom: Math.max(map.getZoom(), 19) });
+}
+
+function revert(address) {
+  const m = markers.get(address);
+  const p = pins.find((x) => x.address === address);
+  if (!m || !p) return;
+  m.marker.setLngLat([p.lon, p.lat]);
+  m.el.classList.remove('dirty');
+  moved.delete(address);
+  render();
+}
+
+function addMarker(p) {
+  const el = document.createElement('div');
+  el.className = 'pin' + (p.locked ? ' locked' : '');
+  // The unit number alone -- the street is the same for every pin on screen.
+  el.textContent = (p.address.match(/^\d+[A-Za-z]?/) || [p.address])[0];
+  el.title = p.address + '\n' + p.names.join('\n');
+
+  const marker = new maplibregl.Marker({ element: el, draggable: !p.locked })
+    .setLngLat([p.lon, p.lat]).addTo(map);
+
+  marker.on('dragend', () => {
+    const { lat, lng } = marker.getLngLat();
+    // Back where it started, to the metre? Then it is not a move.
+    const same = Math.abs(lat - p.lat) < 1e-5 && Math.abs(lng - p.lon) < 1e-5;
+    if (same) { moved.delete(p.address); el.classList.remove('dirty'); }
+    else { moved.set(p.address, { lat, lon: lng }); el.classList.add('dirty'); }
+    render();
+  });
+  markers.set(p.address, { marker, el, pin: p });
+}
+
+async function load() {
+  pins = await (await fetch('/pins')).json();
+  for (const p of pins) addMarker(p);
+  if (pins.length) {
+    const b = new maplibregl.LngLatBounds();
+    for (const p of pins) b.extend([p.lon, p.lat]);
+    map.fitBounds(b, { padding: 60, animate: false });
+  }
+  document.getElementById('status').textContent =
+    pins.length + ' units · ' + pins.filter((p) => p.locked).length + ' locked';
+  render();
+}
+
+document.getElementById('save').onclick = async () => {
+  const btn = document.getElementById('save');
+  const status = document.getElementById('status');
+  btn.disabled = true;
+  status.textContent = 'saving…';
+  const moves = [...moved.entries()].map(([address, d]) => ({ address, lat: d.lat, lon: d.lon }));
+  try {
+    const r = await (await fetch('/save', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ moves })
+    })).json();
+    if (r.error) throw new Error(r.error);
+    // Re-read from the master rather than trusting what we just sent: if the
+    // server refused one, the screen must show the refusal, not the drag.
+    moved.clear();
+    for (const o of markers.values()) o.marker.remove();
+    markers.clear();
+    await load();
+    status.textContent = 'saved ' + r.applied.length +
+      (r.refused.length ? ' · REFUSED ' + r.refused.length + ': ' + r.refused.join('; ') : '') +
+      ' · now export to the phone';
+  } catch (err) {
+    status.textContent = 'save failed: ' + err.message;
+    btn.disabled = false;
+  }
+};
+
+map.on('load', load);
+</script>
+</body>
+</html>
