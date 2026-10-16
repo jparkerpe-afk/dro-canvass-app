@@ -177,8 +177,14 @@ const flag = (name: string) => {
   const i = Deno.args.indexOf(name);
   return i >= 0 ? Deno.args[i + 1] : null;
 };
+// --oaks builds the condo complexes instead of the neighbourhoods. They are a
+// different walk and a different kind of sheet: no map, because a dot on a roof
+// cannot tell you which of eight doors under it you want, and grouped by
+// building, because the unit number already says which building it is in (631
+// is building 6) and that is how someone actually walks a complex.
+const OAKS = Deno.args.includes("--oaks");
 const BACKUP = args[0] || newestBackup();
-const OUT = flag("--out") || DEFAULT_OUT;
+const OUT = flag("--out") || (OAKS ? `${DEFAULT_OUT}/oaks` : DEFAULT_OUT);
 const SIZE = Number(flag("--size")) || TURF_TARGET;
 console.log(`reading ${BACKUP.split("/").pop()}`);
 
@@ -238,7 +244,8 @@ for (const v of backup.voters as Voter[]) {
 const houses: House[] = [];
 for (const h of backup.households) {
   const street = streetOf(h.address);
-  if (DEFERRED.test(street) || OFF_LIST_STREET.test(street)) continue;
+  if (OAKS ? !DEFERRED.test(street) : DEFERRED.test(street)) continue;
+  if (OFF_LIST_STREET.test(street)) continue;
   if (EXCLUDED.houses.has(normKey(h.address))) continue;
 
   const live = (byHousehold.get(h.id) || []).filter((v) => !v.stale);
@@ -254,7 +261,10 @@ for (const h of backup.households) {
     id: h.id,
     address: h.address,
     num: parseInt(h.address) || 0,
-    street,
+    // In the complexes the heading that helps is the building, not the street
+    // -- every unit on the sheet shares the street. The leading digit of the
+    // unit number is the building: 631 is building 6.
+    street: OAKS ? `${street} · BUILDING ${String(parseInt(h.address) || 0)[0] ?? "?"}` : street,
     lat: h.lat,
     lon: h.lon,
     notes: (h.notes || "").trim(),
@@ -583,6 +593,22 @@ for (const b of blocks) {
 // An arterial with fewer doors left than a turf holds simply becomes a small
 // turf rather than being padded from the street next door.
 const turfs: Turf[] = [];
+
+// A complex is one packet, buildings in order inside it. No cutting by size and
+// no east-west ordering: you walk a condo complex building by building, and
+// splitting one across two sheets would send two people to the same stairwell.
+if (OAKS) {
+  const byComplex = new Map<string, Block[]>();
+  for (const b of blocks) {
+    const complex = b.street.split(" · ")[0];
+    if (!byComplex.has(complex)) byComplex.set(complex, []);
+    byComplex.get(complex)!.push(b);
+  }
+  for (const [, group] of [...byComplex].sort((a, b) => a[0].localeCompare(b[0]))) {
+    group.sort((a, b) => a.street.localeCompare(b.street) || a.houses[0].num - b.houses[0].num);
+    turfs.push({ blocks: group, houses: group.flatMap((b) => b.houses) });
+  }
+} else
 for (const [, group] of [...byArterial].sort((a, b) => a[0].localeCompare(b[0]))) {
   group.sort((a, b) => a.lon - b.lon);
   const total = group.reduce((s, b) => s + b.houses.length, 0);
@@ -850,7 +876,9 @@ function renderTurf(turf: Turf, n: number, total: number): string {
   }
   const ordered = [...groups.entries()]
     .map(([s, hs]) => [s, hs.sort((a, b) => a.num - b.num)] as [string, House[]])
-    .sort((a, b) => b[1].length - a[1].length);
+    // Buildings run 1, 2, 3 -- that is the order you walk them. Out on the
+    // streets the biggest block comes first and the stubs hang off it.
+    .sort((a, b) => OAKS ? a[0].localeCompare(b[0]) : b[1].length - a[1].length);
 
   const targetCount = turf.houses.reduce((s, h) => s + h.targets.length, 0);
   const body = ordered.map(([street, hs]) => `
@@ -882,7 +910,13 @@ function renderTurf(turf: Turf, n: number, total: number): string {
   return `<section class="turf">
 <header>
   <h1>CHERYL PARKER · DEL REY OAKS</h1>
-  <p class="sub">Turf ${n} of ${total} &middot; ${turf.houses.length} households &middot; ${targetCount} people to ask &middot; about ${distance(routeMetres(turf.houses))} on foot</p>
+  <p class="sub">${
+    OAKS
+      // Walking distance inside a complex is meaningless -- it is all one
+      // car park and a set of stairwells. The useful count is buildings.
+      ? `${ordered[0][0].split(" · ")[0]} &middot; ${ordered.length} buildings &middot; ${turf.houses.length} units &middot; ${targetCount} people to ask`
+      : `Turf ${n} of ${total} &middot; ${turf.houses.length} households &middot; ${targetCount} people to ask &middot; about ${distance(routeMetres(turf.houses))} on foot`
+  }</p>
 </header>
 <div class="fill">
   <span><b>Volunteer</b></span><span><b>Date</b></span><span><b>Finished</b></span>
@@ -892,8 +926,13 @@ function renderTurf(turf: Turf, n: number, total: number): string {
   Leave a person blank if you did not talk to them &mdash; blank is not a no.
   Names in grey are registered at the address but are not on our list; if one answers the door, talk to them anyway and write it in the notes.
 </p>
-${turfMap(turf)}
-<p class="map-cap">Every dot is a door on this sheet. Streets in bold are yours; the paler ones are just there to get your bearings.</p>
+${
+  // No map in the complexes. A dot on a roof cannot say which of the eight
+  // doors beneath it you want, so the map would imply a precision that does
+  // not exist. The building heading and the unit number do the work instead.
+  OAKS ? "" : turfMap(turf) +
+  `\n<p class="map-cap">Every dot is a door on this sheet. Streets in bold are yours; the paler ones are just there to get your bearings.</p>`
+}
 ${body}
 <footer><span>Turf ${n} of ${total}</span><span>Return this sheet to Jed &mdash; it is the only copy.</span></footer>
 </section>`;
